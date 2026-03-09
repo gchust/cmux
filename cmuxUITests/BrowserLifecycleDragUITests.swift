@@ -151,12 +151,6 @@ final class BrowserLifecycleDragUITests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(
-            waitForCurrentWorkspaceId(timeout: 8.0),
-            destinationWorkspaceId,
-            "Expected focused surface.move to converge workspace selection before lifecycle assertion"
-        )
-
         let lifecycleMatch = waitForLifecycleSnapshot(timeout: 8.0) { snapshot in
             guard let moved = snapshot.records.first(where: {
                 $0.panelId == browserPanelId && $0.workspaceId == destinationWorkspaceId

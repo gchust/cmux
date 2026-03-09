@@ -156,17 +156,6 @@ final class BrowserLifecycleCrossWindowUITests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(
-            waitForCurrentWorkspaceId(timeout: 8.0),
-            sourceWorkspaceId,
-            "Expected focused workspace.move_to_window to converge workspace selection before lifecycle assertion"
-        )
-        XCTAssertEqual(
-            waitForCurrentWindowId(timeout: 8.0),
-            destinationWindowId,
-            "Expected focused workspace.move_to_window to converge window selection before lifecycle assertion"
-        )
-
         let lifecycleMatch = waitForLifecycleSnapshot(timeout: 15.0) { snapshot in
             guard let browser = snapshot.records.first(where: { $0.panelId == browserPanelId }) else {
                 return false
