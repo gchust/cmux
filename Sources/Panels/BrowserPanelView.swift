@@ -975,6 +975,7 @@ struct BrowserPanelView: View {
             )
         }
 #endif
+        guard addressBarFocused != focused else { return }
         addressBarFocused = focused
         if focused {
             panel.noteAddressBarFocused()
@@ -1242,6 +1243,13 @@ struct BrowserPanelView: View {
     }
 
     private func hideSuggestions() {
+        let hasSuggestionState =
+            suggestionTask != nil ||
+            isLoadingRemoteSuggestions ||
+            inlineCompletion != nil ||
+            !omnibarState.suggestions.isEmpty ||
+            omnibarState.selectedSuggestionID != nil
+        guard hasSuggestionState else { return }
         suggestionTask?.cancel()
         suggestionTask = nil
         let effects = omnibarReduce(state: &omnibarState, event: .suggestionsUpdated([]))
