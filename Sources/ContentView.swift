@@ -1933,7 +1933,6 @@ struct ContentView: View {
 
     /// Space at top of content area reserved for the custom workspace titlebar.
     @State private var titlebarPadding: CGFloat = 32
-    private let collapsedTitlebarDragHandleHeight: CGFloat = 30
 
     private var terminalContent: some View {
         let mountedWorkspaceIdSet = Set(mountedWorkspaceIds)
@@ -1993,12 +1992,6 @@ struct ContentView: View {
             if showWorkspaceTitlebar {
                 // Titlebar overlay is only over terminal content, not the sidebar.
                 customTitlebar
-            } else {
-                // When the custom titlebar is hidden, keep empty space in the top pane tab bar
-                // draggable without turning the full content area into a window drag target.
-                WindowDragHandleView()
-                    .frame(height: collapsedTitlebarDragHandleHeight)
-                    .frame(maxWidth: .infinity)
             }
         }
     }

@@ -3040,7 +3040,7 @@ enum TelemetrySettings {
     static let enabledForCurrentLaunch = isEnabled()
 }
 
-private extension TitlebarControlsVisibilityMode {
+private extension ChromeControlsVisibilityMode {
     var displayName: String {
         switch self {
         case .always:
@@ -3061,6 +3061,8 @@ struct SettingsView: View {
     @AppStorage(AppIconSettings.modeKey) private var appIconMode = AppIconSettings.defaultMode.rawValue
     @AppStorage(TitlebarControlsVisibilitySettings.modeKey)
     private var titlebarControlsVisibilityMode = TitlebarControlsVisibilitySettings.defaultMode.rawValue
+    @AppStorage(PaneTabBarControlsVisibilitySettings.modeKey)
+    private var paneTabBarControlsVisibilityMode = PaneTabBarControlsVisibilitySettings.defaultMode.rawValue
     @AppStorage(WorkspaceTitlebarSettings.showTitlebarKey)
     private var showWorkspaceTitlebar = WorkspaceTitlebarSettings.defaultShowTitlebar
     @AppStorage(SocketControlSettings.appStorageKey) private var socketControlMode = SocketControlSettings.defaultMode.rawValue
@@ -3136,7 +3138,7 @@ struct SettingsView: View {
         NewWorkspacePlacement(rawValue: newWorkspacePlacement) ?? WorkspacePlacementSettings.defaultPlacement
     }
 
-    private var selectedTitlebarControlsVisibilityMode: TitlebarControlsVisibilityMode {
+    private var selectedTitlebarControlsVisibilityMode: ChromeControlsVisibilityMode {
         TitlebarControlsVisibilitySettings.mode(for: titlebarControlsVisibilityMode)
     }
 
@@ -3158,6 +3160,32 @@ struct SettingsView: View {
             return String(
                 localized: "settings.app.titlebarControls.subtitleHover",
                 defaultValue: "Hide titlebar buttons until the pointer reaches them."
+            )
+        }
+    }
+
+    private var selectedPaneTabBarControlsVisibilityMode: ChromeControlsVisibilityMode {
+        PaneTabBarControlsVisibilitySettings.mode(for: paneTabBarControlsVisibilityMode)
+    }
+
+    private var paneTabBarControlsVisibilitySelection: Binding<String> {
+        Binding(
+            get: { selectedPaneTabBarControlsVisibilityMode.rawValue },
+            set: { paneTabBarControlsVisibilityMode = PaneTabBarControlsVisibilitySettings.mode(for: $0).rawValue }
+        )
+    }
+
+    private var paneTabBarControlsVisibilitySubtitle: String {
+        switch selectedPaneTabBarControlsVisibilityMode {
+        case .always:
+            return String(
+                localized: "settings.app.paneTabBarControls.subtitleAlways",
+                defaultValue: "Keep the pane tab bar's new tab and split buttons visible."
+            )
+        case .onHover:
+            return String(
+                localized: "settings.app.paneTabBarControls.subtitleHover",
+                defaultValue: "Hide the pane tab bar's new tab and split buttons until you hover the bar."
             )
         }
     }
@@ -3535,7 +3563,20 @@ struct SettingsView: View {
                             controlWidth: pickerColumnWidth,
                             selection: titlebarControlsVisibilitySelection
                         ) {
-                            ForEach(TitlebarControlsVisibilityMode.allCases) { mode in
+                            ForEach(ChromeControlsVisibilityMode.allCases) { mode in
+                                Text(mode.displayName).tag(mode.rawValue)
+                            }
+                        }
+
+                        SettingsCardDivider()
+
+                        SettingsPickerRow(
+                            String(localized: "settings.app.paneTabBarControls", defaultValue: "Pane Tab Bar Controls"),
+                            subtitle: paneTabBarControlsVisibilitySubtitle,
+                            controlWidth: pickerColumnWidth,
+                            selection: paneTabBarControlsVisibilitySelection
+                        ) {
+                            ForEach(ChromeControlsVisibilityMode.allCases) { mode in
                                 Text(mode.displayName).tag(mode.rawValue)
                             }
                         }
@@ -4465,6 +4506,7 @@ struct SettingsView: View {
         appearanceMode = AppearanceSettings.defaultMode.rawValue
         appIconMode = AppIconSettings.defaultMode.rawValue
         titlebarControlsVisibilityMode = TitlebarControlsVisibilitySettings.defaultMode.rawValue
+        paneTabBarControlsVisibilityMode = PaneTabBarControlsVisibilitySettings.defaultMode.rawValue
         showWorkspaceTitlebar = WorkspaceTitlebarSettings.defaultShowTitlebar
         AppIconSettings.applyIcon(.automatic)
         socketControlMode = SocketControlSettings.defaultMode.rawValue

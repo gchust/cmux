@@ -1,6 +1,6 @@
 import Foundation
 
-enum TitlebarControlsVisibilityMode: String, CaseIterable, Identifiable {
+enum ChromeControlsVisibilityMode: String, CaseIterable, Identifiable {
     case always
     case onHover
 
@@ -9,10 +9,22 @@ enum TitlebarControlsVisibilityMode: String, CaseIterable, Identifiable {
 
 enum TitlebarControlsVisibilitySettings {
     static let modeKey = "titlebarControlsVisibilityMode"
-    static let defaultMode: TitlebarControlsVisibilityMode = .always
+    static let defaultMode: ChromeControlsVisibilityMode = .always
 
-    static func mode(for rawValue: String?) -> TitlebarControlsVisibilityMode {
-        guard let rawValue, let mode = TitlebarControlsVisibilityMode(rawValue: rawValue) else {
+    static func mode(for rawValue: String?) -> ChromeControlsVisibilityMode {
+        guard let rawValue, let mode = ChromeControlsVisibilityMode(rawValue: rawValue) else {
+            return defaultMode
+        }
+        return mode
+    }
+}
+
+enum PaneTabBarControlsVisibilitySettings {
+    static let modeKey = "paneTabBarControlsVisibilityMode"
+    static let defaultMode: ChromeControlsVisibilityMode = .always
+
+    static func mode(for rawValue: String?) -> ChromeControlsVisibilityMode {
+        guard let rawValue, let mode = ChromeControlsVisibilityMode(rawValue: rawValue) else {
             return defaultMode
         }
         return mode

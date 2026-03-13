@@ -73229,6 +73229,57 @@
           }
         }
       }
+    },
+    "settings.app.paneTabBarControls": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pane Tab Bar Controls"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ペインタブバーのコントロール"
+          }
+        }
+      }
+    },
+    "settings.app.paneTabBarControls.subtitleAlways": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep the pane tab bar's new tab and split buttons visible."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ペインタブバーの新規タブボタンと分割ボタンを常に表示します。"
+          }
+        }
+      }
+    },
+    "settings.app.paneTabBarControls.subtitleHover": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide the pane tab bar's new tab and split buttons until you hover the bar."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ペインタブバーにホバーするまで、新規タブボタンと分割ボタンを隠します。"
+          }
+        }
+      }
     }
   }
 }

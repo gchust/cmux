@@ -282,7 +282,7 @@ struct TitlebarControlsView: View {
         alwaysShowShortcutHints || modifierKeyMonitor.isModifierPressed
     }
 
-    private var visibilityMode: TitlebarControlsVisibilityMode {
+    private var visibilityMode: ChromeControlsVisibilityMode {
         TitlebarControlsVisibilitySettings.mode(for: visibilityModeRawValue)
     }
 
