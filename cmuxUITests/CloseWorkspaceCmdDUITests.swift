@@ -61,11 +61,11 @@ final class CloseWorkspaceCmdDUITests: XCTestCase {
         )
         XCTAssertTrue(
             waitForWorkspaceCount(1, timeout: 6.0),
-            "Expected Cmd+W on the last surface to keep the workspace open. list=\(socketCommand(\"list_workspaces\") ?? \"<nil>\")"
+            "Expected Cmd+W on the last surface to keep the workspace open. list=" + (socketCommand("list_workspaces") ?? "<nil>")
         )
         XCTAssertTrue(
             waitForSurfaceCount(1, timeout: 6.0),
-            "Expected Cmd+W on the last surface to leave a single replacement surface. list=\(socketCommand(\"list_surfaces\") ?? \"<nil>\")"
+            "Expected Cmd+W on the last surface to leave a single replacement surface. list=" + (socketCommand("list_surfaces") ?? "<nil>")
         )
 
         let surfaceIdAfter = try XCTUnwrap(firstSurfaceId(), "Expected a focused surface after Cmd+W")
