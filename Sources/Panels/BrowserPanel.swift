@@ -1644,6 +1644,10 @@ protocol BrowserSurfaceRuntime: AnyObject {
     func setPageZoom(_ pageZoom: CGFloat)
     func takeSnapshot(completion: @escaping (NSImage?) -> Void)
     func evaluateJavaScript(_ script: String) async throws -> Any?
+    func findInPage(query: String) async throws -> BrowserFindResult?
+    func findNextInPage() async throws -> BrowserFindResult?
+    func findPreviousInPage() async throws -> BrowserFindResult?
+    func clearFindInPage() async throws
     func captureAddressBarPageFocus(completion: @escaping (BrowserAddressBarPageFocusCaptureStatus) -> Void)
     func restoreAddressBarPageFocus(completion: @escaping (BrowserAddressBarPageFocusRestoreStatus) -> Void)
     func invalidateFaviconCache()
@@ -1818,6 +1822,25 @@ final class LocalWebKitBrowserSurfaceRuntime: BrowserSurfaceRuntime {
 
     func evaluateJavaScript(_ script: String) async throws -> Any? {
         try await webView.evaluateJavaScript(script)
+    }
+
+    func findInPage(query: String) async throws -> BrowserFindResult? {
+        let result = try await webView.evaluateJavaScript(BrowserFindJavaScript.searchScript(query: query))
+        return BrowserFindJavaScript.parseResult(result)
+    }
+
+    func findNextInPage() async throws -> BrowserFindResult? {
+        let result = try await webView.evaluateJavaScript(BrowserFindJavaScript.nextScript())
+        return BrowserFindJavaScript.parseResult(result)
+    }
+
+    func findPreviousInPage() async throws -> BrowserFindResult? {
+        let result = try await webView.evaluateJavaScript(BrowserFindJavaScript.previousScript())
+        return BrowserFindJavaScript.parseResult(result)
+    }
+
+    func clearFindInPage() async throws {
+        _ = try await webView.evaluateJavaScript(BrowserFindJavaScript.clearScript())
     }
 
     func captureAddressBarPageFocus(completion: @escaping (BrowserAddressBarPageFocusCaptureStatus) -> Void) {
@@ -3995,16 +4018,16 @@ extension BrowserPanel {
     func findNext() {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let result = try? await self.runtime.evaluateJavaScript(BrowserFindJavaScript.nextScript())
-            self.parseFindResult(result)
+            let result = try? await self.runtime.findNextInPage()
+            self.applyFindResult(result)
         }
     }
 
     func findPrevious() {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let result = try? await self.runtime.evaluateJavaScript(BrowserFindJavaScript.previousScript())
-            self.parseFindResult(result)
+            let result = try? await self.runtime.findPreviousInPage()
+            self.applyFindResult(result)
         }
     }
 
@@ -4035,10 +4058,9 @@ extension BrowserPanel {
         }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let js = BrowserFindJavaScript.searchScript(query: needle)
             do {
-                let result = try await self.runtime.evaluateJavaScript(js)
-                self.parseFindResult(result)
+                let result = try await self.runtime.findInPage(query: needle)
+                self.applyFindResult(result)
             } catch {
                 NSLog("Find: browser JS search error: %@", error.localizedDescription)
             }
@@ -4049,24 +4071,17 @@ extension BrowserPanel {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                _ = try await self.runtime.evaluateJavaScript(BrowserFindJavaScript.clearScript())
+                try await self.runtime.clearFindInPage()
             } catch {
                 NSLog("Find: browser JS clear error: %@", error.localizedDescription)
             }
         }
     }
 
-    private func parseFindResult(_ result: Any?) {
-        guard let jsonString = result as? String,
-              let data = jsonString.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let total = json["total"] as? Int,
-              let current = json["current"] as? Int,
-              total >= 0, current >= 0 else {
-            return
-        }
-        searchState?.total = UInt(total)
-        searchState?.selected = total > 0 ? UInt(current) : nil
+    private func applyFindResult(_ result: BrowserFindResult?) {
+        guard let result else { return }
+        searchState?.total = result.total
+        searchState?.selected = result.selected
     }
 
     func setBrowserThemeMode(_ mode: BrowserThemeMode) {

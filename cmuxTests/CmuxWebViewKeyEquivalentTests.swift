@@ -14863,6 +14863,44 @@ final class LocalWebKitBrowserSurfaceRuntimeTests: XCTestCase {
         XCTAssertEqual(requestedURLs, [expectedIconURL, expectedIconURL])
     }
 
+    func testFindAdapterUsesRuntimeOwnedFindOperations() async throws {
+        let surface = LocalWebKitBrowserSurfaceRuntime(
+            processPool: WKProcessPool(),
+            configuration: makeConfiguration(scriptSources: [])
+        )
+        let navigationFinished = expectation(description: "find page loaded")
+        surface.eventHandlers = BrowserSurfaceRuntimeEventHandlers(
+            didFinishNavigation: {
+                navigationFinished.fulfill()
+            }
+        )
+
+        surface.loadHTMLString(
+            """
+            <html><body>
+            <p>alpha beta alpha</p>
+            <p>beta gamma</p>
+            </body></html>
+            """,
+            baseURL: nil
+        )
+        await fulfillment(of: [navigationFinished], timeout: 5)
+
+        let searchResult = try await surface.findInPage(query: "alpha")
+        let nextResult = try await surface.findNextInPage()
+        let previousResult = try await surface.findPreviousInPage()
+
+        XCTAssertEqual(searchResult, BrowserFindResult(total: 2, selected: 0))
+        XCTAssertEqual(nextResult, BrowserFindResult(total: 2, selected: 1))
+        XCTAssertEqual(previousResult, BrowserFindResult(total: 2, selected: 0))
+
+        try await surface.clearFindInPage()
+        let markCount = try await surface.evaluateJavaScript(
+            "document.querySelectorAll('mark.__cmux-find').length"
+        ) as? NSNumber
+        XCTAssertEqual(markCount?.intValue, 0)
+    }
+
     func testDeveloperToolsAdapterUsesRuntimeOwnedInspectorOperations() {
         let surface = LocalWebKitBrowserSurfaceRuntime(
             processPool: WKProcessPool(),
@@ -15014,6 +15052,10 @@ final class BrowserPanelRuntimeBoundaryTests: XCTestCase {
         private(set) var restoreAddressBarPageFocusCallCount = 0
         private(set) var invalidateFaviconCacheCallCount = 0
         private(set) var fetchFaviconPNGDataCallCount = 0
+        private(set) var findQueries: [String] = []
+        private(set) var findNextInPageCallCount = 0
+        private(set) var findPreviousInPageCallCount = 0
+        private(set) var clearFindInPageCallCount = 0
         private(set) var revealDeveloperToolsCallCount = 0
         private(set) var concealDeveloperToolsCallCount = 0
         private(set) var showDeveloperToolsConsoleCallCount = 0
@@ -15022,6 +15064,13 @@ final class BrowserPanelRuntimeBoundaryTests: XCTestCase {
         var restoreAddressBarPageFocusStatuses: [BrowserAddressBarPageFocusRestoreStatus] = [.noState]
         var fetchedFaviconPNGData: Data?
         var onFetchFaviconPNGData: (() -> Void)?
+        var findInPageResult: BrowserFindResult?
+        var findNextInPageResult: BrowserFindResult?
+        var findPreviousInPageResult: BrowserFindResult?
+        var onFindInPage: (() -> Void)?
+        var onFindNextInPage: (() -> Void)?
+        var onFindPreviousInPage: (() -> Void)?
+        var onClearFindInPage: (() -> Void)?
         var currentDeveloperToolsVisibilityState: BrowserSurfaceDeveloperToolsVisibilityState = .unavailable
 
         init() {
@@ -15121,6 +15170,29 @@ final class BrowserPanelRuntimeBoundaryTests: XCTestCase {
 
         func evaluateJavaScript(_ script: String) async throws -> Any? {
             nil
+        }
+
+        func findInPage(query: String) async throws -> BrowserFindResult? {
+            findQueries.append(query)
+            onFindInPage?()
+            return findInPageResult
+        }
+
+        func findNextInPage() async throws -> BrowserFindResult? {
+            findNextInPageCallCount += 1
+            onFindNextInPage?()
+            return findNextInPageResult
+        }
+
+        func findPreviousInPage() async throws -> BrowserFindResult? {
+            findPreviousInPageCallCount += 1
+            onFindPreviousInPage?()
+            return findPreviousInPageResult
+        }
+
+        func clearFindInPage() async throws {
+            clearFindInPageCallCount += 1
+            onClearFindInPage?()
         }
 
         func captureAddressBarPageFocus(completion: @escaping (BrowserAddressBarPageFocusCaptureStatus) -> Void) {
@@ -15261,6 +15333,70 @@ final class BrowserPanelRuntimeBoundaryTests: XCTestCase {
         XCTAssertEqual(lastAttemptedNavigationURL, url)
         XCTAssertEqual(loadedRequestURL, url)
         XCTAssertEqual(lastCustomUserAgent, BrowserUserAgentSettings.safariUserAgent)
+    }
+
+    func testBrowserPanelFindUsesRuntimeBoundary() async {
+        let runtime = RecordingBrowserSurfaceRuntime()
+        let panel = BrowserPanel(
+            workspaceId: UUID(),
+            runtimeFactory: RecordingBrowserSurfaceRuntimeFactory(runtime: runtime)
+        )
+
+        let initialClearInvoked = expectation(description: "initial find clear")
+        runtime.onClearFindInPage = {
+            initialClearInvoked.fulfill()
+        }
+        panel.startFind()
+        await fulfillment(of: [initialClearInvoked], timeout: 1)
+
+        runtime.onClearFindInPage = nil
+        runtime.findInPageResult = BrowserFindResult(total: 3, selected: 0)
+        let searchInvoked = expectation(description: "find search")
+        runtime.onFindInPage = {
+            searchInvoked.fulfill()
+        }
+        panel.searchState?.needle = "runtime"
+        await fulfillment(of: [searchInvoked], timeout: 1)
+
+        XCTAssertEqual(runtime.findQueries.last, "runtime")
+        XCTAssertEqual(panel.searchState?.total, 3)
+        XCTAssertEqual(panel.searchState?.selected, 0)
+
+        runtime.onFindInPage = nil
+        runtime.findNextInPageResult = BrowserFindResult(total: 3, selected: 1)
+        let nextInvoked = expectation(description: "find next")
+        runtime.onFindNextInPage = {
+            nextInvoked.fulfill()
+        }
+        panel.findNext()
+        await fulfillment(of: [nextInvoked], timeout: 1)
+
+        XCTAssertEqual(runtime.findNextInPageCallCount, 1)
+        XCTAssertEqual(panel.searchState?.selected, 1)
+
+        runtime.onFindNextInPage = nil
+        runtime.findPreviousInPageResult = BrowserFindResult(total: 3, selected: 0)
+        let previousInvoked = expectation(description: "find previous")
+        runtime.onFindPreviousInPage = {
+            previousInvoked.fulfill()
+        }
+        panel.findPrevious()
+        await fulfillment(of: [previousInvoked], timeout: 1)
+
+        XCTAssertEqual(runtime.findPreviousInPageCallCount, 1)
+        XCTAssertEqual(panel.searchState?.selected, 0)
+
+        runtime.onFindPreviousInPage = nil
+        let clearInvoked = expectation(description: "find hide clear")
+        let baselineClearCallCount = runtime.clearFindInPageCallCount
+        runtime.onClearFindInPage = {
+            clearInvoked.fulfill()
+        }
+        panel.hideFind()
+        await fulfillment(of: [clearInvoked], timeout: 1)
+
+        XCTAssertNil(panel.searchState)
+        XCTAssertEqual(runtime.clearFindInPageCallCount, baselineClearCallCount + 1)
     }
 
     func testBrowserPanelDeveloperToolsVisibilityUsesRuntimeBoundary() {
