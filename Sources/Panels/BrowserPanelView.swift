@@ -954,12 +954,12 @@ struct BrowserPanelView: View {
     }
 
     private func shouldApplyAddressBarExitFallback(in window: NSWindow) -> Bool {
-        panel.surfaceWindow() === window && isPanelFocusedInModel()
+        panel.surfaceHostingWindow() === window && isPanelFocusedInModel()
     }
 
 #if DEBUG
     private func browserFocusWindow() -> NSWindow? {
-        panel.surfaceWindow() ?? NSApp.keyWindow ?? NSApp.mainWindow
+        panel.effectiveSurfaceWindow()
     }
 
     private func browserFocusResponderDescription(_ responder: NSResponder?) -> String {
@@ -5628,7 +5628,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         isPanelFocused: Bool
     ) {
         // Focus handling. Avoid fighting the address bar when it is focused.
-        guard let window = panel.surfaceWindow() ?? panel.portalAnchorView.window ?? nsView.window else {
+        guard let window = panel.surfaceHostingWindow() ?? nsView.window else {
 #if DEBUG
             dlog(
                 "browser.focus.content.apply panel=\(panel.id.uuidString.prefix(5)) " +

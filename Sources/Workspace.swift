@@ -3845,15 +3845,7 @@ final class Workspace: Identifiable, ObservableObject {
             let selectionConverged =
                 self.bonsplitController.focusedPaneId == paneId &&
                 self.bonsplitController.selectedTab(inPane: paneId)?.id == tabId
-            let anchorReady: Bool = {
-                guard let browserPanel = self.browserPanel(for: panelId) else { return false }
-                let anchorView = browserPanel.portalAnchorView
-                return
-                    anchorView.window != nil &&
-                    anchorView.superview != nil &&
-                    anchorView.bounds.width > 1 &&
-                    anchorView.bounds.height > 1
-            }()
+            let anchorReady = self.browserPanel(for: panelId)?.isSurfacePortalAnchorReady() ?? false
 
             if !selectionConverged {
                 self.focusPanel(panelId)
@@ -4398,7 +4390,7 @@ extension Workspace: BonsplitDelegate {
             return terminalPanel.hostedView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
         }
         if let browserPanel = panel as? BrowserPanel {
-            return browserPanel.surfaceWindow() ?? browserPanel.portalAnchorView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+            return browserPanel.surfaceHostingWindow() ?? NSApp.keyWindow ?? NSApp.mainWindow
         }
         return NSApp.keyWindow ?? NSApp.mainWindow
     }

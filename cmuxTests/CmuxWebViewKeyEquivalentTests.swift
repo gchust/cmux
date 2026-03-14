@@ -15806,11 +15806,33 @@ final class BrowserPanelRuntimeBoundaryTests: XCTestCase {
         )
 
         XCTAssertTrue(panel.surfaceWindow() === panelWindow)
+        XCTAssertTrue(panel.surfaceHostingWindow() === panelWindow)
         XCTAssertEqual(panel.effectiveSurfaceWindow(), panelWindow)
         XCTAssertEqual(panel.surfaceFrameInWindowCoordinates(), panelFrame)
         XCTAssertTrue(panel.isSurfaceHiddenOrHasHiddenAncestor())
         XCTAssertTrue(panel.isSurfaceBlankForAutofocus())
         XCTAssertTrue(panel.isSurfaceLoadingNow())
+    }
+
+    func testBrowserPanelSurfaceHostingWindowFallsBackToPortalAnchorWindow() {
+        let runtime = RecordingBrowserSurfaceRuntime()
+        let panel = BrowserPanel(
+            workspaceId: UUID(),
+            runtimeFactory: RecordingBrowserSurfaceRuntimeFactory(runtime: runtime)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 180),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let host = NSView(frame: window.contentView?.bounds ?? .zero)
+        host.autoresizingMask = [.width, .height]
+        host.addSubview(panel.portalAnchorView)
+        window.contentView = host
+
+        XCTAssertNil(panel.surfaceWindow())
+        XCTAssertTrue(panel.surfaceHostingWindow() === window)
     }
 
     func testBrowserPanelSurfaceFocusStateUsesRuntimeBoundary() {
@@ -15829,6 +15851,31 @@ final class BrowserPanelRuntimeBoundaryTests: XCTestCase {
         )
 
         XCTAssertTrue(panelWindow.makeFirstResponder(responder))
+        XCTAssertTrue(panel.isSurfaceFocusedInHostWindow())
+        XCTAssertEqual(runtime.ownsResponderCallCount, 1)
+        XCTAssertTrue(runtime.lastOwnedResponder === responder)
+    }
+
+    func testBrowserPanelSurfaceFocusStateFallsBackToPortalAnchorWindow() {
+        let runtime = RecordingBrowserSurfaceRuntime()
+        runtime.ownsResponderResult = true
+        let panel = BrowserPanel(
+            workspaceId: UUID(),
+            runtimeFactory: RecordingBrowserSurfaceRuntimeFactory(runtime: runtime)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 140),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let contentView = NSView(frame: window.contentView?.bounds ?? .zero)
+        let responder = NSView(frame: contentView.bounds)
+        contentView.addSubview(panel.portalAnchorView)
+        contentView.addSubview(responder)
+        window.contentView = contentView
+
+        XCTAssertTrue(window.makeFirstResponder(responder))
         XCTAssertTrue(panel.isSurfaceFocusedInHostWindow())
         XCTAssertEqual(runtime.ownsResponderCallCount, 1)
         XCTAssertTrue(runtime.lastOwnedResponder === responder)

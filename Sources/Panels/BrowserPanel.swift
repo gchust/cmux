@@ -4289,8 +4289,12 @@ extension BrowserPanel {
         runtime.hostWindow()
     }
 
+    func surfaceHostingWindow() -> NSWindow? {
+        surfaceWindow() ?? portalAnchorView.window
+    }
+
     func effectiveSurfaceWindow() -> NSWindow? {
-        surfaceWindow() ?? NSApp.keyWindow ?? NSApp.mainWindow
+        surfaceHostingWindow() ?? NSApp.keyWindow ?? NSApp.mainWindow
     }
 
     func surfaceFrameInWindowCoordinates() -> CGRect? {
@@ -4338,7 +4342,7 @@ extension BrowserPanel {
     }
 
     func isSurfaceFocusedInHostWindow() -> Bool {
-        guard let window = surfaceWindow() else { return false }
+        guard let window = surfaceHostingWindow() else { return false }
         return surfaceOwnsResponder(window.firstResponder)
     }
 
