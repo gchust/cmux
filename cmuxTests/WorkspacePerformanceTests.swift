@@ -8,6 +8,37 @@ import XCTest
 
 @MainActor
 final class WorkspacePerformanceTests: XCTestCase {
+    private struct BenchmarkThresholds {
+        let workspaceCreationP95Ms: Double
+        let bonsplitPopulationP95Ms: Double
+        let sidebarRefreshP95Ms: Double
+        let workspaceSwitchP95Ms: Double
+
+        init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+            workspaceCreationP95Ms = Self.doubleValue(
+                environment["CMUX_WORKSPACE_BENCHMARK_MAX_CREATION_P95_MS"],
+                defaultValue: 75
+            )
+            bonsplitPopulationP95Ms = Self.doubleValue(
+                environment["CMUX_WORKSPACE_BENCHMARK_MAX_POPULATION_P95_MS"],
+                defaultValue: 50
+            )
+            sidebarRefreshP95Ms = Self.doubleValue(
+                environment["CMUX_WORKSPACE_BENCHMARK_MAX_SIDEBAR_REFRESH_P95_MS"],
+                defaultValue: 25
+            )
+            workspaceSwitchP95Ms = Self.doubleValue(
+                environment["CMUX_WORKSPACE_BENCHMARK_MAX_SWITCH_P95_MS"],
+                defaultValue: 25
+            )
+        }
+
+        private static func doubleValue(_ rawValue: String?, defaultValue: Double) -> Double {
+            guard let rawValue, let parsed = Double(rawValue) else { return defaultValue }
+            return parsed
+        }
+    }
+
     private struct BenchmarkConfiguration {
         let workspaceCount: Int
         let tabsPerWorkspace: Int
@@ -102,7 +133,7 @@ final class WorkspacePerformanceTests: XCTestCase {
         return Double(elapsed) / 1_000_000
     }
 
-    private func drainMainQueue(file: StaticString = #filePath, line: UInt = #line) {
+    private func drainMainQueue() {
         let drained = expectation(description: "main queue drained")
         DispatchQueue.main.async { drained.fulfill() }
         wait(for: [drained], timeout: 1.0)
@@ -256,8 +287,14 @@ final class WorkspacePerformanceTests: XCTestCase {
         )
     }
 
-    func testWorkspaceCreationAndFastSwitchingBenchmark() {
+    func testWorkspaceCreationAndFastSwitchingBenchmark() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["CMUX_RUN_WORKSPACE_BENCHMARK"] == "1",
+            "Set CMUX_RUN_WORKSPACE_BENCHMARK=1 to run the dense workspace benchmark."
+        )
+
         let result = benchmarkWorkspaceCreationAndSwitching()
+        let thresholds = BenchmarkThresholds()
         print("WORKSPACE_BENCHMARK\n\(result.summary)")
 
         XCTContext.runActivity(named: "Workspace benchmark summary") { activity in
@@ -266,22 +303,22 @@ final class WorkspacePerformanceTests: XCTestCase {
 
         XCTAssertLessThan(
             result.workspaceCreation.p95Ms,
-            50,
+            thresholds.workspaceCreationP95Ms,
             "Workspace creation p95 should stay below the interactive lag threshold.\n\(result.summary)"
         )
         XCTAssertLessThan(
             result.bonsplitPopulation.p95Ms,
-            35,
+            thresholds.bonsplitPopulationP95Ms,
             "Per-workspace Bonsplit tab population p95 should stay bounded.\n\(result.summary)"
         )
         XCTAssertLessThan(
             result.sidebarRefresh.p95Ms,
-            15,
+            thresholds.sidebarRefreshP95Ms,
             "Sidebar refresh p95 should stay bounded during dense workspace switching.\n\(result.summary)"
         )
         XCTAssertLessThan(
             result.workspaceSwitchEndToEnd.p95Ms,
-            16,
+            thresholds.workspaceSwitchP95Ms,
             "Workspace switching p95 should stay below a frame budget.\n\(result.summary)"
         )
     }

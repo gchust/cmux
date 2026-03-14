@@ -1524,6 +1524,7 @@ final class Workspace: Identifiable, ObservableObject {
               let paneId = paneId(forPanelId: panelId) else { return }
         bonsplitController.updateTab(tabId, isPinned: pinned)
         normalizePinnedTabs(in: paneId)
+        invalidateSidebarOrderingCache()
     }
 
     func markPanelUnread(_ panelId: UUID) {
