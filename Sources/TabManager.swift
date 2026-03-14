@@ -1386,6 +1386,7 @@ class TabManager: ObservableObject {
         guard tab.isPinned != pinned else { return }
         tab.isPinned = pinned
         reorderTabForPinnedState(tab)
+        AppDelegate.shared?.persistSessionMutationImmediately(reason: "workspace_pin")
     }
 
     private func reorderTabForPinnedState(_ tab: Workspace) {
