@@ -3461,7 +3461,7 @@ struct ContentView: View {
         let nextVisibleResultIDs = Self.commandPalettePendingVisibleResultIDs(
             previewResultIDs: previewResults.map(\.id),
             currentVisibleResultIDs: commandPaletteVisibleResults.map(\.id),
-            canReuseCurrentVisibleResults: canReuseCurrentVisibleResults
+            preserveCurrentVisibleResultsOnEmptyPreview: canReuseCurrentVisibleResults && scope == .switcher
         )
         let nextVisibleResults: [CommandPaletteSearchResult]
         if nextVisibleResultIDs == previewResults.map(\.id) {
@@ -3564,9 +3564,9 @@ struct ContentView: View {
     static func commandPalettePendingVisibleResultIDs(
         previewResultIDs: [String],
         currentVisibleResultIDs: [String],
-        canReuseCurrentVisibleResults: Bool
+        preserveCurrentVisibleResultsOnEmptyPreview: Bool
     ) -> [String] {
-        guard canReuseCurrentVisibleResults else {
+        guard preserveCurrentVisibleResultsOnEmptyPreview else {
             return previewResultIDs
         }
         if previewResultIDs.isEmpty, !currentVisibleResultIDs.isEmpty {

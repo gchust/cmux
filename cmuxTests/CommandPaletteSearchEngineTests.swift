@@ -421,12 +421,23 @@ final class CommandPaletteSearchEngineTests: XCTestCase {
         XCTAssertEqual(previewCandidateIDs.last, "command.191")
     }
 
-    func testPendingVisibleResultsPreserveCurrentRowsWhenPreviewIsEmpty() {
+    func testPendingVisibleResultsClearStaleRowsForCommandResultsWhenPreviewIsEmpty() {
         XCTAssertEqual(
             ContentView.commandPalettePendingVisibleResultIDs(
                 previewResultIDs: [],
                 currentVisibleResultIDs: ["workspace.1", "workspace.2"],
-                canReuseCurrentVisibleResults: true
+                preserveCurrentVisibleResultsOnEmptyPreview: false
+            ),
+            []
+        )
+    }
+
+    func testPendingVisibleResultsPreserveCurrentRowsForSwitcherWhenPreviewIsEmpty() {
+        XCTAssertEqual(
+            ContentView.commandPalettePendingVisibleResultIDs(
+                previewResultIDs: [],
+                currentVisibleResultIDs: ["workspace.1", "workspace.2"],
+                preserveCurrentVisibleResultsOnEmptyPreview: true
             ),
             ["workspace.1", "workspace.2"]
         )
@@ -437,7 +448,7 @@ final class CommandPaletteSearchEngineTests: XCTestCase {
             ContentView.commandPalettePendingVisibleResultIDs(
                 previewResultIDs: [],
                 currentVisibleResultIDs: ["workspace.1", "workspace.2"],
-                canReuseCurrentVisibleResults: false
+                preserveCurrentVisibleResultsOnEmptyPreview: false
             ),
             []
         )
@@ -448,7 +459,7 @@ final class CommandPaletteSearchEngineTests: XCTestCase {
             ContentView.commandPalettePendingVisibleResultIDs(
                 previewResultIDs: ["workspace.9"],
                 currentVisibleResultIDs: ["workspace.1", "workspace.2"],
-                canReuseCurrentVisibleResults: true
+                preserveCurrentVisibleResultsOnEmptyPreview: true
             ),
             ["workspace.9"]
         )
