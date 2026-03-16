@@ -12154,6 +12154,31 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
         )
     }
 
+    func testStartOrFocusTerminalSearchReusesExistingSearchState() {
+        let surface = TerminalSurface(
+            tabId: UUID(),
+            context: GHOSTTY_SURFACE_CONTEXT_SPLIT,
+            configTemplate: nil,
+            workingDirectory: nil
+        )
+        let existingSearchState = TerminalSurface.SearchState(needle: "existing")
+        surface.searchState = existingSearchState
+
+        var focusNotificationCount = 0
+        XCTAssertTrue(
+            startOrFocusTerminalSearch(surface) { _ in
+                focusNotificationCount += 1
+            }
+        )
+
+        XCTAssertTrue(surface.searchState === existingSearchState)
+        XCTAssertEqual(
+            focusNotificationCount,
+            1,
+            "Re-triggering terminal Find should refocus the existing overlay without recreating state"
+        )
+    }
+
     func testEscapeDismissingFindOverlayDoesNotLeakEscapeKeyUpToTerminal() {
         _ = NSApplication.shared
 
