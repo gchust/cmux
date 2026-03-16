@@ -8428,20 +8428,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             event: event,
             shortcut: StoredShortcut(key: "w", command: true, shift: false, option: false, control: false)
         ) {
-            // Browser popup windows primarily intercept Cmd+W in BrowserPopupPanel.
-            // This AppDelegate path is a fallback for cases where AppKit routes the
-            // event through the global shortcut handler first.
-            if let targetWindow = [NSApp.keyWindow, event.window]
+            // Auxiliary windows can still route through the app-level handler first.
+            if let targetWindow = [event.window, NSApp.keyWindow, NSApp.mainWindow]
                 .compactMap({ $0 })
-                .first(where: { $0.identifier?.rawValue == "cmux.browser-popup" }) {
+                .first(where: { cmuxShouldHandleCloseShortcutDirectly(window: $0, event: event) }) {
 #if DEBUG
-                dlog("shortcut.cmdW route=browserPopup")
+                dlog("shortcut.cmdW route=auxiliary window=\(targetWindow.identifier?.rawValue ?? "nil")")
 #endif
                 targetWindow.performClose(nil)
                 return true
-            } else if let targetWindow = event.window ?? NSApp.keyWindow ?? NSApp.mainWindow,
-               cmuxWindowShouldOwnCloseShortcut(targetWindow) {
-                targetWindow.performClose(nil)
             } else {
                 let responder = event.window?.firstResponder
                     ?? NSApp.keyWindow?.firstResponder
@@ -11249,6 +11244,14 @@ private extension NSWindow {
         let frType = self.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
         dlog("performKeyEquiv: \(Self.keyDescription(event)) fr=\(frType)")
 #endif
+
+        if cmuxShouldHandleCloseShortcutDirectly(window: self, event: event) {
+#if DEBUG
+            dlog("  → consumed by auxiliary Cmd+W close")
+#endif
+            performClose(nil)
+            return true
+        }
 
         // When the terminal surface is the first responder, prevent SwiftUI's
         // hosting view from consuming key events via performKeyEquivalent.

@@ -616,11 +616,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             return
         }
 
-#if DEBUG
-        XCTAssertTrue(appDelegate.debugHandleCustomShortcut(event: event))
-#else
-        throw XCTSkip("debugHandleCustomShortcut is only available in DEBUG builds")
-#endif
+        XCTAssertTrue(auxiliaryWindow.performKeyEquivalent(with: event))
 
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
 
@@ -675,11 +671,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             return
         }
 
-#if DEBUG
-        XCTAssertTrue(appDelegate.debugHandleCustomShortcut(event: event))
-#else
-        throw XCTSkip("debugHandleCustomShortcut is only available in DEBUG builds")
-#endif
+        XCTAssertTrue(configurationErrorsWindow.performKeyEquivalent(with: event))
 
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
 
