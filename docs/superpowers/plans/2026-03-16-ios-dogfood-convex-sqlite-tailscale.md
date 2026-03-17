@@ -528,6 +528,72 @@ git add ios/Sources/Terminal/TerminalServerDiscovery.swift ios/Sources/Terminal/
 git commit -m "ios: add convex-backed machine discovery with fallback"
 ```
 
+### Task 7A: Prefer Live Machine Rows Over Placeholder Server Pins
+
+**Files:**
+- Modify: `ios/Sources/Terminal/TerminalServerCatalog.swift`
+- Modify: `ios/Sources/Terminal/TerminalServerDiscovery.swift`
+- Modify: `ios/Sources/Convex/ConvexMobileDogfoodModels.swift`
+- Modify: `ios/Sources/Terminal/TerminalSidebarStore.swift`
+- Modify: `ios/Sources/Terminal/TerminalSidebarRootView.swift`
+- Modify: `ios/Sources/Config/UITestConfig.swift`
+- Modify: `ios/Sources/ContentView.swift`
+- Test: `ios/cmuxTests/TerminalServerCatalogTests.swift`
+- Test: `ios/cmuxTests/TerminalServerDiscoveryTests.swift`
+- Test: `ios/cmuxTests/TerminalSidebarStoreTests.swift`
+- Test: `ios/cmuxUITests/TerminalHomeUITests.swift`
+
+- [ ] **Step 1: Write the failing shadowing tests**
+
+Add tests that prove:
+
+```swift
+func testMergeReplacesPlaceholderCustomHostWithLiveMachine() {
+    // placeholder "Mac mini" host with empty hostname/user
+    // live machine row with a different machineId but the same tailscale hostname
+    // expect one discovered host and no setup placeholder
+}
+```
+
+```swift
+func testDiscoveredFixtureOpensWorkspaceInsteadOfHostEditor() {
+    // launch terminal home with a placeholder + live machine fixture
+    // tap the machine pin
+    // expect workspace detail, not terminal.hostEditor
+}
+```
+
+- [ ] **Step 2: Run the focused tests**
+
+Run:
+
+```bash
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/task-move-ios-app-into-cmux-repo/ios && xcodebuild test -project cmux.xcodeproj -scheme cmux -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:cmuxTests/TerminalServerCatalogTests -only-testing:cmuxTests/TerminalServerDiscoveryTests -only-testing:cmuxTests/TerminalSidebarStoreTests -only-testing:cmuxUITests/TerminalHomeUITests
+```
+
+Expected: FAIL because placeholder pins still survive discovery merge and the terminal home still routes some taps into the editor sheet.
+
+- [ ] **Step 3: Implement placeholder shadowing and tap routing**
+
+Make these rules explicit:
+- live machine rows win over legacy metadata rows when hostname or server identity matches
+- live machine rows also win over unconfigured custom placeholder hosts with the same display name
+- discovered server pins never open the config sheet on tap
+- only custom/manual hosts can enter the editor flow
+- discovered machine rows should prefer the Tailscale hostname as their `serverID` so daemon ticket lookup and legacy dedupe converge on the same identifier
+
+- [ ] **Step 4: Re-run the focused tests**
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/task-move-ios-app-into-cmux-repo
+git add ios/Sources/Terminal/TerminalServerCatalog.swift ios/Sources/Terminal/TerminalServerDiscovery.swift ios/Sources/Convex/ConvexMobileDogfoodModels.swift ios/Sources/Terminal/TerminalSidebarStore.swift ios/Sources/Terminal/TerminalSidebarRootView.swift ios/Sources/Config/UITestConfig.swift ios/Sources/ContentView.swift ios/cmuxTests/TerminalServerCatalogTests.swift ios/cmuxTests/TerminalServerDiscoveryTests.swift ios/cmuxTests/TerminalSidebarStoreTests.swift ios/cmuxUITests/TerminalHomeUITests.swift
+git commit -m "ios: prefer live machines over setup placeholders"
+```
+
 ## Chunk 5: Wire The iOS App To Live Convex State
 
 ### Task 8: Subscribe To The Unified Inbox And Persist It Locally

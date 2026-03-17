@@ -50,6 +50,15 @@ enum UITestConfig {
         #endif
     }
 
+    static var terminalDiscoveredFixtureEnabled: Bool {
+        #if DEBUG
+        let env = ProcessInfo.processInfo.environment
+        return env["CMUX_UITEST_TERMINAL_DISCOVERED_FIXTURE"] == "1"
+        #else
+        return false
+        #endif
+    }
+
     static var terminalInboxFixtureEnabled: Bool {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment

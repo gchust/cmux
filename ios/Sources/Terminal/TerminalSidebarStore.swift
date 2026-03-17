@@ -617,9 +617,16 @@ final class TerminalSidebarStore: ObservableObject {
         let hostname = item.tailscaleHostname ??
             item.tailscaleIPs.first ??
             machineID
+        let serverID = normalizedRemoteServerID(machineID: machineID, tailscaleHostname: item.tailscaleHostname)
 
         if let existingIndex = hosts.firstIndex(where: {
-            $0.stableID == machineID || $0.serverID == machineID
+            $0.stableID == machineID ||
+                $0.serverID == machineID ||
+                $0.serverID == serverID ||
+                ($0.source == .discovered && $0.hostname.caseInsensitiveCompare(hostname) == .orderedSame) ||
+                ($0.source == .custom &&
+                    !$0.isConfigured &&
+                    $0.name.caseInsensitiveCompare(hostName) == .orderedSame)
         }) {
             hosts[existingIndex].stableID = machineID
             hosts[existingIndex].name = hostName
@@ -628,7 +635,7 @@ final class TerminalSidebarStore: ObservableObject {
             hosts[existingIndex].source = .discovered
             hosts[existingIndex].transportPreference = .remoteDaemon
             hosts[existingIndex].teamID = item.teamID
-            hosts[existingIndex].serverID = machineID
+            hosts[existingIndex].serverID = serverID
             hosts[existingIndex].allowsSSHFallback = false
             return hosts[existingIndex]
         }
@@ -644,11 +651,19 @@ final class TerminalSidebarStore: ObservableObject {
             source: .discovered,
             transportPreference: .remoteDaemon,
             teamID: item.teamID,
-            serverID: machineID,
+            serverID: serverID,
             allowsSSHFallback: false
         )
         hosts.append(host)
         return host
+    }
+
+    private func normalizedRemoteServerID(machineID: String, tailscaleHostname: String?) -> String {
+        let trimmedHostname = tailscaleHostname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedHostname.isEmpty {
+            return trimmedHostname
+        }
+        return machineID
     }
 
     private func observeWorkspaceMetadata() {
@@ -1446,6 +1461,52 @@ extension TerminalSidebarStore {
             networkPathMonitor: nil,
             eagerlyRestoreSessions: false
         )
+    }
+
+    static func uiTestDiscoveredFixture() -> TerminalSidebarStore {
+        let placeholderHost = TerminalHost(
+            id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+            stableID: "cmux-setup",
+            name: "Mac mini",
+            hostname: "",
+            username: "",
+            symbolName: "desktopcomputer",
+            palette: .mint,
+            sortIndex: 0,
+            source: .custom,
+            transportPreference: .rawSSH
+        )
+        let snapshot = TerminalStoreSnapshot(
+            hosts: [placeholderHost],
+            workspaces: [],
+            selectedWorkspaceID: nil
+        )
+        let store = TerminalSidebarStore(
+            snapshotStore: InMemoryTerminalSnapshotStore(snapshot: snapshot),
+            credentialsStore: InMemoryTerminalCredentialsStore(),
+            transportFactory: TerminalUITestConnectedTransportFactory(),
+            serverDiscovery: nil,
+            networkPathMonitor: nil,
+            eagerlyRestoreSessions: false
+        )
+
+        store.applyDiscoveredHosts([
+            TerminalHost(
+                stableID: "machine-macmini-live",
+                name: "Mac mini",
+                hostname: "cmux-macmini",
+                username: "cmux",
+                symbolName: "desktopcomputer",
+                palette: .mint,
+                source: .discovered,
+                transportPreference: .remoteDaemon,
+                teamID: "team-uitest",
+                serverID: "cmux-macmini",
+                allowsSSHFallback: false
+            )
+        ])
+
+        return store
     }
 
     static func uiTestInputFixture() -> TerminalSidebarStore {

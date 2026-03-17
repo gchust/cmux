@@ -28,11 +28,10 @@ struct TerminalServerCatalog {
 
     static func merge(discovered: [TerminalHost], local: [TerminalHost]) -> [TerminalHost] {
         let discoveredStableIDs = Set(discovered.map(\.stableID))
-        let localByStableID = Dictionary(uniqueKeysWithValues: local.map { ($0.stableID, $0) })
         var nextSortIndex = (local.map(\.sortIndex).max() ?? -1) + 1
 
         let mergedDiscovered = discovered.map { host -> TerminalHost in
-            guard let existing = localByStableID[host.stableID] else {
+            guard let existing = preferredLocalMatch(for: host, within: local) else {
                 defer { nextSortIndex += 1 }
                 return TerminalHost(
                     id: host.id,
@@ -80,10 +79,28 @@ struct TerminalServerCatalog {
         }
 
         let retainedCustomHosts = local.filter { host in
-            host.source == .custom && !discoveredStableIDs.contains(host.stableID)
+            host.source == .custom &&
+                !discoveredStableIDs.contains(host.stableID) &&
+                !discovered.contains(where: { shadowsPlaceholder(host, with: $0) })
         }
 
         return (retainedCustomHosts + mergedDiscovered).sorted(by: TerminalServerCatalog.sortHosts)
+    }
+
+    static func representsSameMachine(_ lhs: TerminalHost, _ rhs: TerminalHost) -> Bool {
+        if normalized(lhs.stableID) == normalized(rhs.stableID) {
+            return true
+        }
+
+        let lhsServerID = normalized(lhs.serverID)
+        let rhsServerID = normalized(rhs.serverID)
+        if !lhsServerID.isEmpty, lhsServerID == rhsServerID {
+            return true
+        }
+
+        let lhsHostname = normalized(lhs.hostname)
+        let rhsHostname = normalized(rhs.hostname)
+        return !lhsHostname.isEmpty && lhsHostname == rhsHostname
     }
 
     private static func sortHosts(_ lhs: TerminalHost, _ rhs: TerminalHost) -> Bool {
@@ -91,6 +108,55 @@ struct TerminalServerCatalog {
             return lhs.sortIndex < rhs.sortIndex
         }
         return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+
+    private static func preferredLocalMatch(
+        for discovered: TerminalHost,
+        within local: [TerminalHost]
+    ) -> TerminalHost? {
+        if let stableIDMatch = local.first(where: {
+            normalized($0.stableID) == normalized(discovered.stableID)
+        }) {
+            return stableIDMatch
+        }
+
+        if let serverIDMatch = local.first(where: {
+            let serverID = normalized(discovered.serverID)
+            return !serverID.isEmpty && normalized($0.serverID) == serverID
+        }) {
+            return serverIDMatch
+        }
+
+        if let hostnameMatch = local.first(where: {
+            let hostname = normalized(discovered.hostname)
+            return !hostname.isEmpty &&
+                $0.source == .discovered &&
+                normalized($0.hostname) == hostname
+        }) {
+            return hostnameMatch
+        }
+
+        return local.first(where: { shadowsPlaceholder($0, with: discovered) })
+    }
+
+    private static func shadowsPlaceholder(_ local: TerminalHost, with discovered: TerminalHost) -> Bool {
+        guard local.source == .custom, !local.isConfigured else {
+            return false
+        }
+
+        if representsSameMachine(local, discovered) {
+            return true
+        }
+
+        let localName = normalized(local.name)
+        let discoveredName = normalized(discovered.name)
+        return !localName.isEmpty && localName == discoveredName
+    }
+
+    private static func normalized(_ value: String?) -> String {
+        value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
     }
 }
 

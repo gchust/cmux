@@ -31,7 +31,7 @@ struct MobileMachineRow: Codable, Equatable, Sendable, Identifiable {
             source: .discovered,
             transportPreference: .remoteDaemon,
             teamID: teamId,
-            serverID: machineId,
+            serverID: preferredServerID,
             allowsSSHFallback: false
         )
     }
@@ -44,6 +44,14 @@ struct MobileMachineRow: Codable, Equatable, Sendable, Identifiable {
         if let firstIP = tailscaleIPs.first,
            !firstIP.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return firstIP
+        }
+        return machineId
+    }
+
+    var preferredServerID: String {
+        let trimmedHostname = tailscaleHostname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedHostname.isEmpty {
+            return trimmedHostname
         }
         return machineId
     }

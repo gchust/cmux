@@ -96,8 +96,11 @@ final class TerminalServerDiscovery: TerminalServerDiscovering {
             return legacyHosts
         }
 
-        let machineStableIDs = Set(machineHosts.map(\.stableID))
-        let legacyFallbackHosts = legacyHosts.filter { !machineStableIDs.contains($0.stableID) }
+        let legacyFallbackHosts = legacyHosts.filter { legacyHost in
+            !machineHosts.contains { machineHost in
+                TerminalServerCatalog.representsSameMachine(machineHost, legacyHost)
+            }
+        }
         return TerminalServerCatalog.merge(
             discovered: machineHosts + legacyFallbackHosts,
             local: []

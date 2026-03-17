@@ -21,6 +21,7 @@ struct ContentView: View {
     private let uiTestTerminalInputFixture = UITestConfig.terminalInputFixtureEnabled
     private let uiTestTerminalInboxFixture = UITestConfig.terminalInboxFixtureEnabled
     private let uiTestTerminalDirectFixture = UITestConfig.terminalDirectFixtureEnabled
+    private let uiTestTerminalDiscoveredFixture = UITestConfig.terminalDiscoveredFixtureEnabled
 
     var body: some View {
         Group {
@@ -54,6 +55,12 @@ struct ContentView: View {
             } else if uiTestTerminalDirectFixture {
                 #if DEBUG
                 TerminalSidebarRootView(store: .uiTestDirectFixture())
+                #else
+                SignInView()
+                #endif
+            } else if uiTestTerminalDiscoveredFixture {
+                #if DEBUG
+                TerminalSidebarRootView(store: .uiTestDiscoveredFixture())
                 #else
                 SignInView()
                 #endif

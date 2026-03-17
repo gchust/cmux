@@ -79,7 +79,7 @@ struct TerminalSidebarRootView: View {
                                     if store.isConfigured(host) {
                                         let workspaceID = store.startWorkspace(on: host)
                                         navigationPath.append(workspaceID)
-                                    } else {
+                                    } else if host.source == .custom {
                                         pendingStartHostID = host.id
                                         editorDraft = TerminalHostEditorDraft(
                                             host: host,
@@ -95,14 +95,16 @@ struct TerminalSidebarRootView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu {
-                                    Button(TerminalHomeStrings.editServerLabel) {
-                                        editorDraft = TerminalHostEditorDraft(
-                                            host: host,
-                                            credentials: store.credentials(for: host)
-                                        )
-                                    }
-                                    Button(TerminalHomeStrings.deleteServerLabel, role: .destructive) {
-                                        store.deleteHost(host)
+                                    if host.source == .custom {
+                                        Button(TerminalHomeStrings.editServerLabel) {
+                                            editorDraft = TerminalHostEditorDraft(
+                                                host: host,
+                                                credentials: store.credentials(for: host)
+                                            )
+                                        }
+                                        Button(TerminalHomeStrings.deleteServerLabel, role: .destructive) {
+                                            store.deleteHost(host)
+                                        }
                                     }
                                 }
                                 .accessibilityIdentifier("terminal.server.\(host.accessibilityIdentifierSlug)")

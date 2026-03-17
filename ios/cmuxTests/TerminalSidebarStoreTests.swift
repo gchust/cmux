@@ -428,10 +428,11 @@ final class TerminalSidebarStoreTests: XCTestCase {
             readMarker.items.count == 1
         }
 
-        let host = try XCTUnwrap(fixture.store.hosts.first(where: { $0.serverID == "machine_123" }))
+        let host = try XCTUnwrap(fixture.store.hosts.first(where: { $0.stableID == "machine_123" }))
         let workspace = try XCTUnwrap(fixture.store.workspace(with: workspaceID))
 
         XCTAssertEqual(host.hostname, "cmux-macmini.tail")
+        XCTAssertEqual(host.serverID, "cmux-macmini.tail")
         XCTAssertEqual(host.transportPreference, .remoteDaemon)
         XCTAssertEqual(workspace.remoteWorkspaceID, "workspace_123")
         XCTAssertEqual(workspace.tmuxSessionName, "cmux-nightly")
@@ -576,6 +577,52 @@ final class TerminalSidebarStoreTests: XCTestCase {
         XCTAssertEqual(fixture.store.hosts.first?.id, existingHost.id)
         XCTAssertEqual(fixture.store.hosts.first?.name, "Mac Mini")
         XCTAssertEqual(fixture.store.hosts.first?.transportPreference, .remoteDaemon)
+    }
+
+    @MainActor
+    func testApplyDiscoveredHostsReplacesPlaceholderCustomHostWithLiveMachine() throws {
+        let placeholderHost = TerminalHost(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
+            stableID: "cmux-setup",
+            name: "Mac Mini",
+            hostname: "",
+            username: "",
+            symbolName: "desktopcomputer",
+            palette: .mint,
+            sortIndex: 0,
+            source: .custom,
+            transportPreference: .rawSSH
+        )
+        let snapshot = TerminalStoreSnapshot(
+            hosts: [placeholderHost],
+            workspaces: [],
+            selectedWorkspaceID: nil
+        )
+        let fixture = makeStore(snapshot: snapshot)
+
+        fixture.store.applyDiscoveredHosts([
+            TerminalHost(
+                stableID: "machine-macmini-live",
+                name: "Mac Mini",
+                hostname: "cmux-macmini",
+                username: "cmux",
+                symbolName: "desktopcomputer",
+                palette: .mint,
+                source: .discovered,
+                transportPreference: .remoteDaemon,
+                teamID: "team-1",
+                serverID: "cmux-macmini",
+                allowsSSHFallback: false
+            )
+        ])
+
+        let host = try XCTUnwrap(fixture.store.hosts.first)
+        XCTAssertEqual(fixture.store.hosts.count, 1)
+        XCTAssertEqual(host.id, placeholderHost.id)
+        XCTAssertEqual(host.stableID, "machine-macmini-live")
+        XCTAssertEqual(host.source, .discovered)
+        XCTAssertEqual(host.serverID, "cmux-macmini")
+        XCTAssertTrue(fixture.store.isConfigured(host))
     }
 
     @MainActor

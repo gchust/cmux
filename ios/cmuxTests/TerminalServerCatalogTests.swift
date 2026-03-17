@@ -154,6 +154,51 @@ final class TerminalServerCatalogTests: XCTestCase {
         XCTAssertEqual(merged.first?.bootstrapCommand, "cmux attach --workspace {{session}}")
     }
 
+    func testMergeReplacesPlaceholderCustomHostWithLiveMachine() {
+        let placeholderID = UUID(uuidString: "00000000-0000-0000-0000-000000000099")!
+        let discovered = [
+            TerminalHost(
+                stableID: "machine-macmini-live",
+                name: "Mac mini",
+                hostname: "cmux-macmini",
+                username: "cmux",
+                symbolName: "desktopcomputer",
+                palette: .mint,
+                source: .discovered,
+                transportPreference: .remoteDaemon,
+                teamID: "team-1",
+                serverID: "cmux-macmini",
+                allowsSSHFallback: false
+            )
+        ]
+
+        let local = [
+            TerminalHost(
+                id: placeholderID,
+                stableID: "cmux-setup",
+                name: "Mac mini",
+                hostname: "",
+                username: "",
+                symbolName: "desktopcomputer",
+                palette: .mint,
+                sortIndex: 3,
+                source: .custom,
+                transportPreference: .rawSSH
+            )
+        ]
+
+        let merged = TerminalServerCatalog.merge(discovered: discovered, local: local)
+
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.id, placeholderID)
+        XCTAssertEqual(merged.first?.stableID, "machine-macmini-live")
+        XCTAssertEqual(merged.first?.hostname, "cmux-macmini")
+        XCTAssertEqual(merged.first?.username, "cmux")
+        XCTAssertEqual(merged.first?.source, .discovered)
+        XCTAssertEqual(merged.first?.serverID, "cmux-macmini")
+        XCTAssertEqual(merged.first?.sortIndex, 3)
+    }
+
     func testCatalogNormalizesDirectTLSPinsFromMetadata() throws {
         let json = """
         {

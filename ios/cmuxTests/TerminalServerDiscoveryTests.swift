@@ -79,6 +79,39 @@ final class TerminalServerDiscoveryTests: XCTestCase {
         XCTAssertEqual(hosts.first?.transportPreference, .remoteDaemon)
     }
 
+    func testDiscoveryPrefersMachineRowsOverLegacyMetadataWhenHostnameMatches() async throws {
+        let memberships = [
+            makeMembership(
+                teamID: "team-1",
+                serverMetadata: #"{"cmux":{"servers":[{"id":"cmux-macmini","name":"Mac mini","hostname":"cmux-macmini","username":"cmux","symbolName":"desktopcomputer","palette":"mint","transport":"cmuxd-remote"}]}}"#
+            )
+        ]
+        let liveMachine = TerminalHost(
+            stableID: "machine-macmini-live",
+            name: "Mac mini",
+            hostname: "cmux-macmini",
+            username: "cmux",
+            symbolName: "desktopcomputer",
+            palette: .mint,
+            source: .discovered,
+            transportPreference: .remoteDaemon,
+            teamID: "team-1",
+            serverID: "cmux-macmini",
+            allowsSSHFallback: false
+        )
+        let discovery = TerminalServerDiscovery(
+            machineHosts: Just([liveMachine]).eraseToAnyPublisher(),
+            teamMemberships: Just(memberships).eraseToAnyPublisher()
+        )
+
+        let hosts = await firstValue(from: discovery.hostsPublisher)
+
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertEqual(hosts.first?.stableID, "machine-macmini-live")
+        XCTAssertEqual(hosts.first?.serverID, "cmux-macmini")
+        XCTAssertEqual(hosts.first?.hostname, "cmux-macmini")
+    }
+
     private func makeMembership(teamID: String, serverMetadata: String?) -> TeamsListTeamMembershipsItem {
         TeamsListTeamMembershipsItem(
             team: TeamsListTeamMembershipsItemTeam(
