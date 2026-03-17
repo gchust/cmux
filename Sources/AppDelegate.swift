@@ -2306,6 +2306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if NSApp.windows.isEmpty {
                     self.openNewMainWindow(nil)
                 }
+                self.moveUITestWindowToTargetDisplayIfNeeded()
                 NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
                 self.writeUITestDiagnosticsIfNeeded(stage: "afterForceWindow")
             }
@@ -2324,6 +2325,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let windows = NSApp.windows
         let ids = windows.map { $0.identifier?.rawValue ?? "" }.joined(separator: ",")
         let vis = windows.map { $0.isVisible ? "1" : "0" }.joined(separator: ",")
+        let screenIDs = windows.map { $0.screen?.cmuxDisplayID.map(String.init) ?? "" }.joined(separator: ",")
+        let targetDisplayID = env["CMUX_UI_TEST_TARGET_DISPLAY_ID"] ?? ""
 
         payload["stage"] = stage
         payload["pid"] = String(ProcessInfo.processInfo.processIdentifier)
@@ -2332,6 +2335,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         payload["windowsCount"] = String(windows.count)
         payload["windowIdentifiers"] = ids
         payload["windowVisibleFlags"] = vis
+        payload["windowScreenDisplayIDs"] = screenIDs
+        payload["uiTestTargetDisplayID"] = targetDisplayID
+        if let rawDisplayID = UInt32(targetDisplayID) {
+            let screenPresent = NSScreen.screens.contains(where: { $0.cmuxDisplayID == rawDisplayID })
+            let movedWindow = windows.contains(where: { $0.screen?.cmuxDisplayID == rawDisplayID })
+            payload["targetDisplayPresent"] = screenPresent ? "1" : "0"
+            payload["targetDisplayMoveSucceeded"] = movedWindow ? "1" : "0"
+        }
 
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
@@ -2343,6 +2354,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return [:]
         }
         return object
+    }
+
+    private func moveUITestWindowToTargetDisplayIfNeeded(attempt: Int = 0) {
+        let env = ProcessInfo.processInfo.environment
+        guard let rawDisplayID = env["CMUX_UI_TEST_TARGET_DISPLAY_ID"],
+              let targetDisplayID = UInt32(rawDisplayID) else {
+            return
+        }
+
+        guard let screen = NSScreen.screens.first(where: { $0.cmuxDisplayID == targetDisplayID }) else {
+            if attempt < 20 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                    self?.moveUITestWindowToTargetDisplayIfNeeded(attempt: attempt + 1)
+                }
+            }
+            self.writeUITestDiagnosticsIfNeeded(stage: "targetDisplayMissing")
+            return
+        }
+
+        guard let window = NSApp.windows.first else {
+            if attempt < 20 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                    self?.moveUITestWindowToTargetDisplayIfNeeded(attempt: attempt + 1)
+                }
+            }
+            self.writeUITestDiagnosticsIfNeeded(stage: "targetDisplayNoWindow")
+            return
+        }
+
+        let visibleFrame = screen.visibleFrame
+        let width = min(window.frame.width, max(visibleFrame.width - 80, 480))
+        let height = min(window.frame.height, max(visibleFrame.height - 80, 360))
+        let frame = NSRect(
+            x: visibleFrame.midX - (width / 2),
+            y: visibleFrame.midY - (height / 2),
+            width: width,
+            height: height
+        ).integral
+
+        window.setFrame(frame, display: true, animate: false)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        if window.screen?.cmuxDisplayID != targetDisplayID, attempt < 20 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.moveUITestWindowToTargetDisplayIfNeeded(attempt: attempt + 1)
+            }
+            return
+        }
+        self.writeUITestDiagnosticsIfNeeded(stage: "afterMoveToTargetDisplay")
     }
 #endif
 
