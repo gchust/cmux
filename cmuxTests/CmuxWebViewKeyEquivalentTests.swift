@@ -13379,11 +13379,9 @@ final class TerminalWindowPortalLifecycleTests: XCTestCase {
             "Initial hit-testing should resolve the portal-hosted terminal at its original window position"
         )
 
-        WindowTerminalPortal.isPointerDragActiveForTesting = true
-        TerminalWindowPortalRegistry.isPointerDragActiveForTesting = true
+        TerminalWindowPortalRegistry.beginInteractiveGeometryResize()
         defer {
-            WindowTerminalPortal.isPointerDragActiveForTesting = false
-            TerminalWindowPortalRegistry.isPointerDragActiveForTesting = false
+            TerminalWindowPortalRegistry.endInteractiveGeometryResize()
         }
 
         do {
@@ -13473,11 +13471,9 @@ final class TerminalWindowPortalLifecycleTests: XCTestCase {
 
         resetGhosttySizeLog()
 
-        WindowTerminalPortal.isPointerDragActiveForTesting = true
-        TerminalWindowPortalRegistry.isPointerDragActiveForTesting = true
+        TerminalWindowPortalRegistry.beginInteractiveGeometryResize()
         defer {
-            WindowTerminalPortal.isPointerDragActiveForTesting = false
-            TerminalWindowPortalRegistry.isPointerDragActiveForTesting = false
+            TerminalWindowPortalRegistry.endInteractiveGeometryResize()
         }
 
         shiftedContainer.frame.origin.x += 72
@@ -13505,7 +13501,7 @@ final class TerminalWindowPortalLifecycleTests: XCTestCase {
         XCTAssertEqual(
             secondPassResizeEvents.count,
             firstPassResizeEvents.count,
-            "Pointer-drag sidebar resizes should not land a second delayed terminal resize on the next queue turn"
+            "Interactive sidebar resizes should not land a second delayed terminal resize on the next queue turn"
         )
     }
 }
