@@ -7472,11 +7472,33 @@ final class SidebarBranchOrderingTests: XCTestCase {
         XCTAssertTrue(workspace.sidebarPullRequestsInDisplayOrder().isEmpty)
     }
 
+    @MainActor
+    func testSidebarPullRequestsHideBranchMismatches() {
+        let workspace = Workspace(title: "Tests", workingDirectory: FileManager.default.currentDirectoryPath, portOrdinal: 0)
+        guard let panelId = workspace.focusedPanelId else {
+            XCTFail("Expected focused panel for new workspace")
+            return
+        }
+
+        workspace.updatePanelGitBranch(panelId: panelId, branch: "main", isDirty: false)
+        workspace.updatePanelPullRequest(
+            panelId: panelId,
+            number: 1629,
+            label: "PR",
+            url: URL(string: "https://github.com/manaflow-ai/cmux/pull/1629")!,
+            status: .open,
+            branch: "feature/sidebar-pr"
+        )
+
+        XCTAssertTrue(workspace.sidebarPullRequestsInDisplayOrder().isEmpty)
+    }
+
     private func pullRequestState(
         number: Int,
         label: String,
         url: String,
         status: SidebarPullRequestStatus,
+        branch: String? = nil,
         checks: SidebarPullRequestChecksStatus? = nil
     ) -> SidebarPullRequestState {
         SidebarPullRequestState(
@@ -7484,6 +7506,7 @@ final class SidebarBranchOrderingTests: XCTestCase {
             label: label,
             url: URL(string: url)!,
             status: status,
+            branch: branch,
             checks: checks
         )
     }

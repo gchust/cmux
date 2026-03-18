@@ -1544,6 +1544,7 @@ class TabManager: ObservableObject {
                 label: "PR",
                 url: url,
                 status: status,
+                branch: branch,
                 checks: checks
             )
         )

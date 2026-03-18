@@ -4512,11 +4512,18 @@ enum SidebarPullRequestChecksStatus: String {
     case pending
 }
 
+private func normalizedSidebarBranchName(_ branch: String?) -> String? {
+    guard let branch else { return nil }
+    let trimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
 struct SidebarPullRequestState: Equatable {
     let number: Int
     let label: String
     let url: URL
     let status: SidebarPullRequestStatus
+    let branch: String?
     let checks: SidebarPullRequestChecksStatus?
 
     init(
@@ -4524,12 +4531,14 @@ struct SidebarPullRequestState: Equatable {
         label: String,
         url: URL,
         status: SidebarPullRequestStatus,
+        branch: String? = nil,
         checks: SidebarPullRequestChecksStatus? = nil
     ) {
         self.number = number
         self.label = label
         self.url = url
         self.status = status
+        self.branch = normalizedSidebarBranchName(branch)
         self.checks = checks
     }
 }
@@ -5699,8 +5708,15 @@ final class Workspace: Identifiable, ObservableObject {
     func updatePanelGitBranch(panelId: UUID, branch: String, isDirty: Bool) {
         let state = SidebarGitBranchState(branch: branch, isDirty: isDirty)
         let existing = panelGitBranches[panelId]
+        let branchChanged = existing?.branch != nil && existing?.branch != branch
         if existing?.branch != branch || existing?.isDirty != isDirty {
             panelGitBranches[panelId] = state
+        }
+        if branchChanged {
+            panelPullRequests.removeValue(forKey: panelId)
+            if panelId == focusedPanelId {
+                pullRequest = nil
+            }
         }
         if panelId == focusedPanelId {
             gitBranch = state
@@ -5709,8 +5725,10 @@ final class Workspace: Identifiable, ObservableObject {
 
     func clearPanelGitBranch(panelId: UUID) {
         panelGitBranches.removeValue(forKey: panelId)
+        panelPullRequests.removeValue(forKey: panelId)
         if panelId == focusedPanelId {
             gitBranch = nil
+            pullRequest = nil
         }
     }
 
@@ -5720,9 +5738,28 @@ final class Workspace: Identifiable, ObservableObject {
         label: String,
         url: URL,
         status: SidebarPullRequestStatus,
+        branch: String? = nil,
         checks: SidebarPullRequestChecksStatus? = nil
     ) {
         let existing = panelPullRequests[panelId]
+        let normalizedBranch = normalizedSidebarBranchName(branch)
+        let currentPanelBranch = normalizedSidebarBranchName(panelGitBranches[panelId]?.branch)
+        let resolvedBranch: String? = {
+            if let normalizedBranch {
+                return normalizedBranch
+            }
+            if let currentPanelBranch {
+                return currentPanelBranch
+            }
+            guard let existing,
+                  existing.number == number,
+                  existing.label == label,
+                  existing.url == url,
+                  existing.status == status else {
+                return nil
+            }
+            return existing.branch
+        }()
         let resolvedChecks: SidebarPullRequestChecksStatus? = {
             if let checks {
                 return checks
@@ -5741,6 +5778,7 @@ final class Workspace: Identifiable, ObservableObject {
             label: label,
             url: url,
             status: status,
+            branch: resolvedBranch,
             checks: resolvedChecks
         )
         if existing != state {
@@ -5922,6 +5960,11 @@ final class Workspace: Identifiable, ObservableObject {
 
     func sidebarPullRequestsInDisplayOrder(orderedPanelIds _: [UUID]) -> [SidebarPullRequestState] {
         guard let pullRequest else { return [] }
+        if let pullRequestBranch = normalizedSidebarBranchName(pullRequest.branch) {
+            guard normalizedSidebarBranchName(gitBranch?.branch) == pullRequestBranch else {
+                return []
+            }
+        }
         return [pullRequest]
     }
 

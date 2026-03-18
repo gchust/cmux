@@ -369,7 +369,8 @@ _cmux_report_pr_for_path() {
         *) return 1 ;;
     esac
 
-    _cmux_send "report_pr $number $url $status_opt --tab=$CMUX_TAB_ID --panel=$CMUX_PANEL_ID"
+    local quoted_branch="${branch//\"/\\\"}"
+    _cmux_send "report_pr $number $url $status_opt --branch=\"$quoted_branch\" --tab=$CMUX_TAB_ID --panel=$CMUX_PANEL_ID"
 }
 
 _cmux_child_pids() {
