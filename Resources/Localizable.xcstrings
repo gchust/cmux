@@ -14349,6 +14349,40 @@
         }
       }
     },
+    "command.enableMinimalMode.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable Minimal Mode"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ミニマルモードを有効にする"
+          }
+        }
+      }
+    },
+    "command.disableMinimalMode.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disable Minimal Mode"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ミニマルモードを無効にする"
+          }
+        }
+      }
+    },
     "command.installCLI.subtitle": {
       "extractionState": "manual",
       "localizations": {
@@ -38278,13 +38312,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Import From Browser…"
+            "value": "Import Browser Data…"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ブラウザーから取り込む…"
+            "value": "ブラウザーデータを取り込む…"
           }
         }
       }
@@ -43256,13 +43290,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Closing Last Surface Closes Workspace"
+            "value": "Keep Workspace Open When Closing Last Surface"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "最後のサーフェスを閉じるとワークスペースも閉じる"
+            "value": "最後のサーフェスを閉じてもワークスペースを残す"
           }
         }
       }
@@ -43273,13 +43307,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Closing the last surface keeps the workspace open. Use Cmd+Shift+W to close a workspace explicitly."
+            "value": "When the focused surface is the last one in its workspace, the close-surface shortcut also closes the workspace."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "最後のサーフェスを閉じてもワークスペースは残ります。ワークスペースを明示的に閉じるにはCmd+Shift+Wを使います。"
+            "value": "フォーカス中のサーフェスがそのワークスペースの最後の1つなら、サーフェスを閉じるショートカットはワークスペースも閉じます。"
           }
         }
       }
@@ -43290,13 +43324,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Closing the last surface also closes its workspace."
+            "value": "When the focused surface is the last one in its workspace, the close-surface shortcut closes only the surface and keeps the workspace open. Use the close-workspace shortcut to close the workspace explicitly."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "最後のサーフェスを閉じると、そのワークスペースも閉じます。"
+            "value": "フォーカス中のサーフェスがそのワークスペースの最後の1つでも、サーフェスを閉じるショートカットはサーフェスだけを閉じ、ワークスペースは残します。ワークスペースを閉じるショートカットを使うと明示的に閉じられます。"
           }
         }
       }
@@ -45450,6 +45484,159 @@
           "stringUnit": {
             "state": "translated",
             "value": "set_progress'ten yerleşik ilerleme çubuğunu göster."
+          }
+        }
+      }
+    },
+    "settings.app.showWorkspaceTitlebar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Workspace Title Bar"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペースのタイトルバーを表示"
+          }
+        }
+      }
+    },
+    "settings.app.showWorkspaceTitlebar.subtitleOff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide the folder and active title above pane tabs."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ペインタブの上にあるフォルダ名と現在のタイトルを隠します。"
+          }
+        }
+      }
+    },
+    "settings.app.showWorkspaceTitlebar.subtitleOn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show the folder and active title above pane tabs."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ペインタブの上にフォルダ名と現在のタイトルを表示します。"
+          }
+        }
+      }
+    },
+    "settings.app.fadeButtons": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fade Buttons"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ボタンをフェード表示"
+          }
+        }
+      }
+    },
+    "settings.app.fadeButtons.subtitleOff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep action buttons always visible."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "操作ボタンを常に表示します。"
+          }
+        }
+      }
+    },
+    "settings.app.fadeButtons.subtitleOn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show action buttons only on hover."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "操作ボタンはホバー時のみ表示します。"
+          }
+        }
+      }
+    },
+    "settings.app.minimalMode": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimal Mode"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ミニマルモード"
+          }
+        }
+      }
+    },
+    "settings.app.minimalMode.subtitleOff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the standard workspace title bar and controls."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "標準のワークスペースタイトルバーと操作を使います。"
+          }
+        }
+      }
+    },
+    "settings.app.minimalMode.subtitleOn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide the workspace title bar and move workspace controls into the sidebar."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペースのタイトルバーを隠し、ワークスペース操作をサイドバーに移動します。"
           }
         }
       }
@@ -51224,13 +51411,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Import From Browser"
+            "value": "Import Browser Data"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ブラウザーから取り込む"
+            "value": "ブラウザーデータを取り込む"
           }
         }
       }
