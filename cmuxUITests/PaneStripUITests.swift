@@ -38,9 +38,12 @@ final class PaneStripUITests: XCTestCase {
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_PATH"] = dataPath
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_SCENARIO"] = scenario
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_FRAME_COUNT"] = String(frameCount)
-        app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_QUIT_WHEN_DONE"] = "1"
         app.launch()
-        app.activate()
+        defer {
+            if app.state != .notRunning {
+                app.terminate()
+            }
+        }
 
         guard let payload = waitForJSONKey("done", equals: "1", atPath: dataPath, timeout: 20.0) else {
             XCTFail("Timed out waiting for pane-strip motion output for \(scenario). data=\(loadJSON(atPath: dataPath) ?? [:])")
