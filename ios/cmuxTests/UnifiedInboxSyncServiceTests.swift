@@ -29,7 +29,7 @@ final class UnifiedInboxSyncServiceTests: XCTestCase {
 
         XCTAssertEqual(items.map(\.kind), [.workspace, .conversation])
         XCTAssertEqual(items.first?.title, "orb / cmux")
-        XCTAssertEqual(items.first?.unreadCount, 1)
+        XCTAssertEqual(items.first?.unreadCount, 2)
     }
 
     func testWorkspaceUpdateRewritesCachedRow() async throws {

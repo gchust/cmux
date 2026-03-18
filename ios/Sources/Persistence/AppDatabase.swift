@@ -89,7 +89,7 @@ final class AppDatabase {
         }
 
         var unreadCount: Int {
-            latestEventSeq > lastReadEventSeq ? 1 : 0
+            max(0, latestEventSeq - lastReadEventSeq)
         }
     }
 

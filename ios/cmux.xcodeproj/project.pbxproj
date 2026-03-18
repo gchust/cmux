@@ -27,6 +27,7 @@
 		2EC5124C64D36074E196402C /* NIOTransportServices in Frameworks */ = {isa = PBXBuildFile; productRef = CA746152467B13A53B76C9C1 /* NIOTransportServices */; };
 		315BB4226F61F35953EB8CB8 /* TerminalHostEditorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06DC281E643F44D11704E22E /* TerminalHostEditorUITests.swift */; };
 		31923ED8E47C92DBCB804037 /* TerminalRemoteDaemonBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0936F75F53B4C96DFB5195B /* TerminalRemoteDaemonBootstrap.swift */; };
+		34BD26BFACF3E785159E5047 /* ConvexWorkspaceLiveSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9774A2FB02CE54197BE7433D /* ConvexWorkspaceLiveSync.swift */; };
 		35DD00750B94902B2CF0CDF6 /* ShortThreadLayoutUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F680356269E010CC8DDF11B /* ShortThreadLayoutUITests.swift */; };
 		361B05C412BFA1E44BDCAD39 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9BA577D046F9E3C331F4986 /* Models.swift */; };
 		36C1EC806C4BE2DFF9644812 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = FF8733643DEE67DE349BDA51 /* Localizable.xcstrings */; };
@@ -218,6 +219,7 @@
 		94431CD1B2F69881E045321C /* NotificationTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationTokenStore.swift; sourceTree = "<group>"; };
 		94978287D80E12EC6746F582 /* GhosttyRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyRuntime.swift; sourceTree = "<group>"; };
 		9566325CEFAAF2297A4320B4 /* TerminalDirectDaemonClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalDirectDaemonClientTests.swift; sourceTree = "<group>"; };
+		9774A2FB02CE54197BE7433D /* ConvexWorkspaceLiveSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConvexWorkspaceLiveSync.swift; sourceTree = "<group>"; };
 		9788FAF68766BFAA9A451A8D /* ChatApproachI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatApproachI.swift; sourceTree = "<group>"; };
 		99867073C84E357DB4E04C20 /* TerminalRemoteDaemonBootstrapSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalRemoteDaemonBootstrapSessionTests.swift; sourceTree = "<group>"; };
 		9E4AC3E9289C53B42C020633 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
@@ -535,6 +537,14 @@
 			path = Notifications;
 			sourceTree = "<group>";
 		};
+		AEF05A0555B84F287A0F08FD /* Mobile */ = {
+			isa = PBXGroup;
+			children = (
+				9774A2FB02CE54197BE7433D /* ConvexWorkspaceLiveSync.swift */,
+			);
+			path = Mobile;
+			sourceTree = "<group>";
+		};
 		BBE2BE334F53D4E47636EF15 /* Debug */ = {
 			isa = PBXGroup;
 			children = (
@@ -625,6 +635,7 @@
 				BBE2BE334F53D4E47636EF15 /* Debug */,
 				601CC1311CE726A1EC6F0BAB /* Generated */,
 				F10890F77A42F9187D998E97 /* Inbox */,
+				AEF05A0555B84F287A0F08FD /* Mobile */,
 				ABA710BCFF8BE52B6A1575C3 /* Notifications */,
 				5ACB5EE45D40EF05CE6BAD48 /* Persistence */,
 				4CDF062C8C5E0A351C836B92 /* Terminal */,
@@ -801,6 +812,7 @@
 				8424B24C0FAE9429670DADCD /* ConvexGeneratedTypes.swift in Sources */,
 				D12CB21CF8D9D02825E54E32 /* ConvexMobileDogfoodModels.swift in Sources */,
 				24D8752AB97DB126660D8F81 /* ConvexTestView.swift in Sources */,
+				34BD26BFACF3E785159E5047 /* ConvexWorkspaceLiveSync.swift in Sources */,
 				FC7437EF35914FCEEF7909AF /* CrashReporter.swift in Sources */,
 				20A59B687D0399C43C985B31 /* DebugInputBar.swift in Sources */,
 				E8B13DCB9119C652559B6070 /* DebugLogStore.swift in Sources */,

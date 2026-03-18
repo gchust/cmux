@@ -10,19 +10,30 @@ protocol UnifiedInboxWorkspaceSyncing: AnyObject {
 @MainActor
 final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
     private let inboxCacheRepository: InboxCacheRepository?
-    private let publisherFactory: @MainActor (String) -> AnyPublisher<[MobileInboxWorkspaceRow], Never>
+    private let workspaceLiveSync: WorkspaceLiveSyncing
     private let subject: CurrentValueSubject<[UnifiedInboxItem], Never>
     private var cancellables = Set<AnyCancellable>()
     private var activeTeamID: String?
+    private var hasAcceptedLiveSnapshot = false
 
     init(
         inboxCacheRepository: InboxCacheRepository?,
-        publisherFactory: @MainActor @escaping (String) -> AnyPublisher<[MobileInboxWorkspaceRow], Never> = UnifiedInboxSyncService.defaultPublisher
+        workspaceLiveSync: WorkspaceLiveSyncing? = nil
     ) {
         self.inboxCacheRepository = inboxCacheRepository
-        self.publisherFactory = publisherFactory
+        self.workspaceLiveSync = workspaceLiveSync ?? ConvexWorkspaceLiveSync()
         let cachedWorkspaceItems = (try? inboxCacheRepository?.load().filter { $0.kind == .workspace }) ?? []
         self.subject = CurrentValueSubject(cachedWorkspaceItems)
+    }
+
+    convenience init(
+        inboxCacheRepository: InboxCacheRepository?,
+        publisherFactory: @MainActor @escaping (String) -> AnyPublisher<[MobileInboxWorkspaceRow], Never>
+    ) {
+        self.init(
+            inboxCacheRepository: inboxCacheRepository,
+            workspaceLiveSync: ClosureWorkspaceLiveSync(publisherFactory: publisherFactory)
+        )
     }
 
     var workspaceItemsPublisher: AnyPublisher<[UnifiedInboxItem], Never> {
@@ -32,9 +43,10 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
     func connect(teamID: String) {
         guard activeTeamID != teamID else { return }
         activeTeamID = teamID
+        hasAcceptedLiveSnapshot = false
         cancellables.removeAll()
 
-        publisherFactory(teamID)
+        workspaceLiveSync.publisher(teamID: teamID)
             .map { rows in
                 rows.map { UnifiedInboxItem(workspaceRow: $0, teamID: teamID) }
             }
@@ -45,6 +57,10 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
     }
 
     private func handleLiveWorkspaceItems(_ items: [UnifiedInboxItem]) {
+        if shouldIgnoreInitialEmptySnapshot(items) {
+            return
+        }
+        hasAcceptedLiveSnapshot = true
         subject.send(items)
         guard let inboxCacheRepository else { return }
 
@@ -61,6 +77,10 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
             print("Failed to persist live workspace inbox items: \(error)")
             #endif
         }
+    }
+
+    private func shouldIgnoreInitialEmptySnapshot(_ items: [UnifiedInboxItem]) -> Bool {
+        !hasAcceptedLiveSnapshot && items.isEmpty && !subject.value.isEmpty
     }
 
     nonisolated static func merge(
@@ -102,17 +122,19 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
             return lhs.id < rhs.id
         }
     }
+}
 
-    private static func defaultPublisher(teamID: String) -> AnyPublisher<[MobileInboxWorkspaceRow], Never> {
-        ConvexClientManager.shared.client
-            .subscribe(
-                to: "mobileInbox:listForUser",
-                with: ["teamSlugOrId": teamID],
-                yielding: [MobileInboxWorkspaceRow].self
-            )
-            .catch { _ in
-                Just([])
-            }
-            .eraseToAnyPublisher()
+@MainActor
+private final class ClosureWorkspaceLiveSync: WorkspaceLiveSyncing {
+    private let publisherFactory: @MainActor (String) -> AnyPublisher<[MobileInboxWorkspaceRow], Never>
+
+    init(
+        publisherFactory: @MainActor @escaping (String) -> AnyPublisher<[MobileInboxWorkspaceRow], Never>
+    ) {
+        self.publisherFactory = publisherFactory
+    }
+
+    func publisher(teamID: String) -> AnyPublisher<[MobileInboxWorkspaceRow], Never> {
+        publisherFactory(teamID)
     }
 }
