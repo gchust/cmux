@@ -27,6 +27,58 @@ private func cmuxTransparentWindowBaseColor() -> NSColor {
     // avoids visual artifacts that can happen with a fully clear window background.
     NSColor.white.withAlphaComponent(0.001)
 }
+
+enum CmuxPendingGhosttySearchRequest: Equatable {
+    case startSearch
+    case searchSelection
+}
+
+enum CmuxGhosttyStartSearchResolution: Equatable {
+    case ignore
+    case focusExisting
+    case updateExistingNeedle(String)
+    case createEmpty
+    case createWithNeedle(String)
+}
+
+func cmuxDecodeGhosttyOptionalCString(_ pointer: UnsafePointer<CChar>?) -> String? {
+    guard let pointer else { return nil }
+
+    // Guard obviously invalid low addresses so Ghostty callback corruption cannot crash us
+    // while handling an empty/open-search notification.
+    let address = UInt(bitPattern: pointer)
+    guard address >= 0x1000 else { return nil }
+
+    return String(validatingUTF8: pointer)
+}
+
+func cmuxResolveGhosttyStartSearch(
+    existingSearchState: Bool,
+    pendingRequest: CmuxPendingGhosttySearchRequest?,
+    needle: String?
+) -> CmuxGhosttyStartSearchResolution {
+    if existingSearchState {
+        if let needle, !needle.isEmpty {
+            return .updateExistingNeedle(needle)
+        }
+        return .focusExisting
+    }
+
+    switch pendingRequest {
+    case .startSearch:
+        return .createEmpty
+    case .searchSelection:
+        if let needle, !needle.isEmpty {
+            return .createWithNeedle(needle)
+        }
+        return .ignore
+    case nil:
+        if let needle, !needle.isEmpty {
+            return .createWithNeedle(needle)
+        }
+        return .ignore
+    }
+}
 #endif
 
 #if DEBUG
@@ -2134,15 +2186,41 @@ class GhosttyApp {
             return true
         case GHOSTTY_ACTION_START_SEARCH:
             guard let terminalSurface = surfaceView.terminalSurface else { return true }
-            let needle = action.action.start_search.needle.flatMap { String(cString: $0) }
+            let pendingRequest = terminalSurface.consumeGhosttySearchActivationRequest()
+            let shouldDecodeNeedle =
+                terminalSurface.searchState != nil || pendingRequest != .startSearch
+            let needle = shouldDecodeNeedle
+                ? cmuxDecodeGhosttyOptionalCString(action.action.start_search.needle)
+                : nil
             DispatchQueue.main.async {
-                if let searchState = terminalSurface.searchState {
-                    if let needle, !needle.isEmpty {
+                let resolution = cmuxResolveGhosttyStartSearch(
+                    existingSearchState: terminalSurface.searchState != nil,
+                    pendingRequest: pendingRequest,
+                    needle: needle
+                )
+
+                switch resolution {
+                case .ignore:
+#if DEBUG
+                    dlog(
+                        "find.startSearch ignored tab=\(terminalSurface.tabId.uuidString.prefix(5)) " +
+                        "surface=\(terminalSurface.id.uuidString.prefix(5)) " +
+                        "pending=\(String(describing: pendingRequest))"
+                    )
+#endif
+                    return
+                case .focusExisting:
+                    break
+                case .updateExistingNeedle(let needle):
+                    if let searchState = terminalSurface.searchState {
                         searchState.needle = needle
                     }
-                } else {
-                    terminalSurface.searchState = TerminalSurface.SearchState(needle: needle ?? "")
+                case .createEmpty:
+                    terminalSurface.searchState = TerminalSurface.SearchState()
+                case .createWithNeedle(let needle):
+                    terminalSurface.searchState = TerminalSurface.SearchState(needle: needle)
                 }
+
                 NotificationCenter.default.post(name: .ghosttySearchFocus, object: terminalSurface)
             }
             return true
@@ -2591,6 +2669,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private var portalLifecycleState: PortalLifecycleState = .live
     private var portalLifecycleGeneration: UInt64 = 1
     private var activePortalHostLease: PortalHostLease?
+    private var pendingGhosttySearchRequest: CmuxPendingGhosttySearchRequest?
     @Published var searchState: SearchState? = nil {
 	        didSet {
 	            if let searchState {
@@ -3585,6 +3664,20 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
     }
 
+    func requestGhosttySearchActivation(_ request: CmuxPendingGhosttySearchRequest) {
+        pendingGhosttySearchRequest = request
+    }
+
+    func consumeGhosttySearchActivationRequest() -> CmuxPendingGhosttySearchRequest? {
+        let request = pendingGhosttySearchRequest
+        pendingGhosttySearchRequest = nil
+        return request
+    }
+
+    func clearGhosttySearchActivationRequest() {
+        pendingGhosttySearchRequest = nil
+    }
+
     @discardableResult
     func toggleKeyboardCopyMode() -> Bool {
         let handled = surfaceView.toggleKeyboardCopyMode()
@@ -4492,7 +4585,14 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             _ = performBindingAction("jump_to_prompt:\(delta * count)")
             refreshKeyboardCopyModeViewportRowFromVisibleAnchor(surface: surface)
         case .startSearch:
-            _ = performBindingAction("start_search")
+            if let terminalSurface, terminalSurface.searchState != nil {
+                NotificationCenter.default.post(name: .ghosttySearchFocus, object: terminalSurface)
+                break
+            }
+            terminalSurface?.requestGhosttySearchActivation(.startSearch)
+            if !performBindingAction("start_search") {
+                terminalSurface?.clearGhosttySearchActivationRequest()
+            }
         case .searchNext:
             performBindingAction("navigate_search:next", repeatCount: count)
             refreshKeyboardCopyModeViewportRowFromVisibleAnchor(surface: surface)

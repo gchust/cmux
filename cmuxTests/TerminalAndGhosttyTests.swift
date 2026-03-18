@@ -1440,6 +1440,66 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
         )
     }
 
+    func testGhosttyStartSearchIgnoresEmptyUnsolicitedRequests() {
+        XCTAssertEqual(
+            cmuxResolveGhosttyStartSearch(
+                existingSearchState: false,
+                pendingRequest: nil,
+                needle: nil
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            cmuxResolveGhosttyStartSearch(
+                existingSearchState: false,
+                pendingRequest: nil,
+                needle: ""
+            ),
+            .ignore
+        )
+    }
+
+    func testGhosttyStartSearchCreatesEmptyStateForExplicitOpenRequest() {
+        XCTAssertEqual(
+            cmuxResolveGhosttyStartSearch(
+                existingSearchState: false,
+                pendingRequest: .startSearch,
+                needle: nil
+            ),
+            .createEmpty
+        )
+    }
+
+    func testGhosttyStartSearchCreatesNeedleStateForSelectionRequest() {
+        XCTAssertEqual(
+            cmuxResolveGhosttyStartSearch(
+                existingSearchState: false,
+                pendingRequest: .searchSelection,
+                needle: "term"
+            ),
+            .createWithNeedle("term")
+        )
+    }
+
+    func testGhosttyStartSearchUpdatesExistingStateWhenNeedleArrives() {
+        XCTAssertEqual(
+            cmuxResolveGhosttyStartSearch(
+                existingSearchState: true,
+                pendingRequest: nil,
+                needle: "term"
+            ),
+            .updateExistingNeedle("term")
+        )
+        XCTAssertEqual(
+            cmuxResolveGhosttyStartSearch(
+                existingSearchState: true,
+                pendingRequest: nil,
+                needle: nil
+            ),
+            .focusExisting
+        )
+    }
+
     func testEscapeDismissingFindOverlayDoesNotLeakEscapeKeyUpToTerminal() {
         _ = NSApplication.shared
 

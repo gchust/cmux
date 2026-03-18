@@ -1739,14 +1739,11 @@ func startOrFocusTerminalSearch(
     }
 
     if terminalSurface.performBindingAction("start_search") {
-        DispatchQueue.main.async { [weak terminalSurface] in
-            guard let terminalSurface, terminalSurface.searchState == nil else { return }
-            terminalSurface.searchState = TerminalSurface.SearchState()
-            searchFocusNotifier(terminalSurface)
-        }
+        terminalSurface.requestGhosttySearchActivation(.startSearch)
         return true
     }
 
+    terminalSurface.clearGhosttySearchActivationRequest()
     terminalSurface.searchState = TerminalSurface.SearchState()
     searchFocusNotifier(terminalSurface)
     return true
