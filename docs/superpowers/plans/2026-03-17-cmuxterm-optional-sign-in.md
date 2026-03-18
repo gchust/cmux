@@ -1,18 +1,44 @@
-# cmuxterm Optional Sign-In Implementation Plan
+# cmuxterm Optional Sign-In And Zero-Config Mobile Attach Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents are available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an optional account sign-in flow to the Swift macOS cmux app so a signed-in Mac can publish itself and its workspaces for iOS dogfooding, while unsigned local terminal use remains unchanged.
+**Goal:** Add an optional account sign-in flow to the Swift macOS cmux app so a signed-in Mac can publish itself and its workspaces for iOS dogfooding, and so iOS can attach directly to that Mac without opening the server config sheet. Unsigned local terminal use must remain unchanged.
 
-**Architecture:** Reuse the existing iOS auth shape instead of inventing a second auth system. The macOS app gets a small shared auth-core package, a native `AuthManager`, a settings-hosted sign-in sheet, and a background publisher that uses the existing mobile machine-session and heartbeat routes. Signed-out state must be a no-op for cloud features, not an app gate.
+**Architecture:** The Mac app opens the web sign-in flow on `cmux.dev`, then receives a native auth callback URL back into the app. The native app stores Stack tokens in a custom token store, validates them through the Stack Auth Swift SDK, defaults to the first team membership, and publishes machine plus workspace state to the existing mobile routes. Zero-config direct attach is part of this plan, so `cmuxd-remote` must grow a direct TLS listener mode and the Mac app must manage its certs, ticket secret, and lifecycle.
 
-**Tech Stack:** SwiftUI, AppKit, StackAuth, URLSession, local Swift package (`CMUXAuthCore`), Hono, Convex team membership queries, Tailscale CLI discovery.
+**Tech Stack:** SwiftUI, AppKit, StackAuth Swift SDK, local Swift package (`CMUXAuthCore`), URLSession, Hono, Convex-backed mobile routes, Tailscale CLI discovery, Go (`cmuxd-remote`).
 
-**Scope Note:** This plan covers optional sign-in, team selection, and machine/workspace presence publishing. It does **not** add Electron-style zero-config direct terminal attach from a brand-new Mac. That direct-daemon publisher is a separate runtime project and should stay out of this auth-first plan.
+**Scope Note:** This plan supersedes the earlier auth-only version. It includes `cmux.dev -> cmux app` callback handling and native zero-config direct terminal attach.
+
+**No-Sleep Rule:** Do not use `sleep`, `Task.sleep`, `DispatchQueue.asyncAfter`, polling loops with arbitrary delays, or similar timing hacks in shipped code for auth callback handling, process startup, publisher coordination, or direct-daemon readiness. Use URL-open callbacks, process pipes, notifications, state observation, and explicit readiness signals.
 
 ---
 
-## Chunk 1: Freeze The Missing Product Contract
+## Testing Strategy
+
+- `cmux` unit tests:
+  - `xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-auth-unit -only-testing:cmuxTests/AuthCallbackRouterTests -only-testing:cmuxTests/AuthManagerTests -only-testing:cmuxTests/TailscaleStatusProviderTests -only-testing:cmuxTests/WorkspaceSnapshotBuilderTests -only-testing:cmuxTests/MobileHeartbeatPublisherTests -only-testing:cmuxTests/MobileDirectDaemonManagerTests test`
+- `cmuxd-remote` tests:
+  - `cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in/daemon/remote && go test ./cmd/cmuxd-remote`
+- `manaflow` tests:
+  - `cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex/apps/www && bunx vitest run lib/utils/native-app-deeplink.test.ts`
+  - `cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex && bun check`
+- Tagged build verification:
+  - `cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && ./scripts/reload.sh --tag auth-mobile`
+  - Inspect the built app bundle URL scheme with `plutil` against the built `Info.plist`, not the checked-in plist.
+- UI automation:
+  - Trigger `test-e2e.yml` for `SettingsAccountUITests` after pushing the branch.
+- Manual dogfood:
+  - Signed-out launch still behaves exactly like today.
+  - Settings shows account state and a browser sign-in button.
+  - Browser sign-in returns to the tagged app, not a different installed build.
+  - First team membership is selected automatically.
+  - The signed-in Mac appears at the top of the iOS terminal home without opening the config sheet.
+  - Opening that Mac attaches directly through the daemon ticket path.
+
+---
+
+## Chunk 1: Refresh The Branches And Freeze The New Contract
 
 ### File Structure
 
@@ -20,684 +46,472 @@
 
 - Modify: `GhosttyTabs.xcodeproj/project.pbxproj`
 - Modify: `Package.resolved`
-- Modify: `Resources/Localizable.xcstrings`
-- Modify: `Sources/cmuxApp.swift`
-- Modify: `Sources/AppDelegate.swift`
-- Modify: `Sources/TabManager.swift`
-- Modify: `Sources/Workspace.swift`
-- Create: `Packages/CMUXAuthCore/Package.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthConfig.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthIdentityStore.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthSessionCache.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthState.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthUser.swift`
-- Create: `Packages/CMUXAuthCore/Tests/CMUXAuthCoreTests/CMUXAuthStateTests.swift`
-- Create: `Sources/Auth/AuthEnvironment.swift`
-- Create: `Sources/Auth/StackAuthApp.swift`
-- Create: `Sources/Auth/AuthManager.swift`
-- Create: `Sources/Auth/AuthSettingsStore.swift`
-- Create: `Sources/Auth/SignInSheetView.swift`
-- Create: `Sources/MobilePresence/MobileBootstrapClient.swift`
-- Create: `Sources/MobilePresence/MobileMachineIdentityService.swift`
-- Create: `Sources/MobilePresence/WorkspaceSnapshotBuilder.swift`
-- Create: `Sources/MobilePresence/MobileHeartbeatPublisher.swift`
-- Test: `cmuxTests/AuthManagerTests.swift`
-- Test: `cmuxTests/MobileBootstrapClientTests.swift`
-- Test: `cmuxTests/WorkspaceSnapshotBuilderTests.swift`
-- Test: `cmuxTests/MobileHeartbeatPublisherTests.swift`
-- Test: `cmuxUITests/SettingsAccountUITests.swift`
+- Modify: `Resources/Info.plist`
+- Modify: `scripts/reload.sh`
+- Create: `cmuxTests/AuthCallbackRouterTests.swift`
+- Create: `cmuxTests/AuthManagerTests.swift`
+- Create: `cmuxTests/MobileDirectDaemonManagerTests.swift`
+- Modify: `daemon/remote/cmd/cmuxd-remote/main_test.go`
 
 **manaflow repo:** `/Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex`
 
-- Modify: `apps/www/lib/routes/index.ts`
-- Create: `apps/www/lib/routes/mobile-bootstrap.route.ts`
-- Test: `apps/www/lib/routes/mobile-bootstrap.route.test.ts`
+- Create: `apps/www/lib/utils/native-app-deeplink.ts`
+- Create: `apps/www/lib/utils/native-app-deeplink.test.ts`
+- Modify: `apps/www/app/(home)/handler/after-sign-in/page.tsx`
 
-### Task 1: Write Down The Real Optional-Sign-In Contract
+### Task 1: Rebase And Add Failing Contract Tests
 
 **Files:**
-- Test: `Packages/CMUXAuthCore/Tests/CMUXAuthCoreTests/CMUXAuthStateTests.swift`
+- Test: `cmuxTests/AuthCallbackRouterTests.swift`
 - Test: `cmuxTests/AuthManagerTests.swift`
-- Test: `apps/www/lib/routes/mobile-bootstrap.route.test.ts`
+- Test: `cmuxTests/MobileDirectDaemonManagerTests.swift`
+- Test: `daemon/remote/cmd/cmuxd-remote/main_test.go`
+- Test: `apps/www/lib/utils/native-app-deeplink.test.ts`
 
-- [ ] **Step 1: Add the failing auth-state package test**
-
-```swift
-func testPrimedSignedOutStateDoesNotGateLocalApp() {
-    let state = CMUXAuthState.primed(
-        clearAuthRequested: false,
-        mockDataEnabled: false,
-        fixtureUser: nil,
-        autoLoginCredentials: nil,
-        cachedUser: nil,
-        hasTokens: false,
-        mockUser: CMUXAuthUser(id: "mock", primaryEmail: nil, displayName: "Mock")
-    )
-
-    XCTAssertFalse(state.isAuthenticated)
-    XCTAssertNil(state.currentUser)
-    XCTAssertFalse(state.isRestoringSession)
-}
-```
-
-- [ ] **Step 2: Add the failing mac auth-manager test**
-
-```swift
-func testSignedOutManagerLeavesCloudFeaturesDisabledButAppUsable() async throws {
-    let manager = AuthManager(
-        stack: FakeStackAuthClient(),
-        userCache: InMemoryAuthUserCache(),
-        sessionCache: InMemoryAuthSessionCache(),
-        settingsStore: InMemoryAuthSettingsStore()
-    )
-
-    await manager.restoreSessionIfNeeded()
-
-    XCTAssertFalse(manager.isAuthenticated)
-    XCTAssertNil(manager.currentUser)
-    XCTAssertNil(manager.selectedTeamID)
-}
-```
-
-- [ ] **Step 3: Add the failing backend bootstrap-route test**
-
-```ts
-it("returns the signed-in user's teams for native clients", async () => {
-  const app = createAppWithMobileBootstrapTestRouter({
-    user: { id: "user_123", primaryEmail: "l@cmux.dev" },
-    teams: [
-      { teamId: "team_a", slug: "cmux", displayName: "cmux" },
-      { teamId: "team_b", slug: "labs", displayName: "Labs" },
-    ],
-  });
-
-  const response = await app.request("/mobile/bootstrap", {
-    headers: { Authorization: "Bearer valid-token" },
-  });
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
-    userId: "user_123",
-    email: "l@cmux.dev",
-    teams: [
-      { teamId: "team_a", slug: "cmux", displayName: "cmux" },
-      { teamId: "team_b", slug: "labs", displayName: "Labs" },
-    ],
-    defaultTeamId: "team_a",
-  });
-});
-```
-
-- [ ] **Step 4: Run the focused tests and confirm they fail**
+- [ ] **Step 1: Rebase both feature branches onto their latest default branches**
 
 Run:
 
 ```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && swift test --package-path Packages/CMUXAuthCore
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-auth-contract -only-testing:cmuxTests/AuthManagerTests test
-cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex/apps/www && bunx vitest run lib/routes/mobile-bootstrap.route.test.ts
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && git fetch origin && git rebase origin/main
+cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex && git fetch origin && git rebase origin/main
 ```
 
 Expected:
-- `swift test` fails because `CMUXAuthCore` does not exist in this repo yet.
-- `xcodebuild` fails because `AuthManager` and the in-memory caches do not exist.
-- `vitest` fails because `/mobile/bootstrap` does not exist.
+- Both worktrees are on top of the latest `origin/main`.
+- Any conflicts are resolved before writing code.
 
-- [ ] **Step 5: Commit the failing tests**
+- [ ] **Step 2: Add failing native auth callback tests**
+
+Cover:
+- `cmux://auth-callback?stack_refresh=...&stack_access=...` parses into tokens.
+- Tagged callback schemes like `cmux-dev-auth-mobile://auth-callback?...` are accepted.
+- Missing tokens or wrong callback paths are rejected.
+- Signed-out state does not gate local terminal usage.
+- Applying callback tokens marks auth as primed and loads the first team when the Stack client reports memberships.
+
+- [ ] **Step 3: Add failing direct-daemon contract tests**
+
+Cover:
+- `cmuxd-remote serve --tls --listen ...` rejects an invalid ticket.
+- `cmuxd-remote serve --tls --listen ...` accepts a valid HMAC ticket and answers the JSON handshake.
+- The Swift manager builds the right spawn arguments and persists cert plus secret material without using arbitrary waits.
+
+- [ ] **Step 4: Add failing web deeplink allowlist tests**
+
+Cover:
+- `cmux://auth-callback` is allowed.
+- Tagged dev schemes like `cmux-dev-auth-mobile://auth-callback` are allowed.
+- Non-cmux custom schemes are rejected.
+- Relative web redirects still work.
+
+- [ ] **Step 5: Run the tests to confirm they fail for the right reasons**
+
+Run:
+
+```bash
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-auth-contract -only-testing:cmuxTests/AuthCallbackRouterTests -only-testing:cmuxTests/AuthManagerTests -only-testing:cmuxTests/MobileDirectDaemonManagerTests test
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in/daemon/remote && go test ./cmd/cmuxd-remote
+cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex/apps/www && bunx vitest run lib/utils/native-app-deeplink.test.ts
+```
+
+Expected:
+- Swift tests fail because the auth callback router, auth manager hooks, and direct-daemon manager do not exist yet.
+- Go tests fail because TLS serve mode and handshake verification do not exist yet.
+- Vitest fails because the deeplink helper does not exist yet.
+
+- [ ] **Step 6: Commit the failing tests**
 
 ```bash
 cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
-git add Packages/CMUXAuthCore/Tests/CMUXAuthCoreTests/CMUXAuthStateTests.swift cmuxTests/AuthManagerTests.swift
-git commit -m "test: define optional sign-in contract"
+git add cmuxTests/AuthCallbackRouterTests.swift cmuxTests/AuthManagerTests.swift cmuxTests/MobileDirectDaemonManagerTests.swift daemon/remote/cmd/cmuxd-remote/main_test.go
+git commit -m "test: define native auth and direct attach contract"
 
 cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex
-git add apps/www/lib/routes/mobile-bootstrap.route.test.ts
-git commit -m "test: define mobile bootstrap route contract"
+git add apps/www/lib/utils/native-app-deeplink.test.ts
+git commit -m "test: define cmux deeplink contract"
 ```
 
-## Chunk 2: Add The Shared Auth And Bootstrap Foundation
+---
 
-### Task 2: Port The Shared Auth Core Into cmuxterm
+## Chunk 2: Teach `cmux.dev` To Return To cmuxterm
+
+### File Structure
+
+**manaflow repo:** `/Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex`
+
+- Create: `apps/www/lib/utils/native-app-deeplink.ts`
+- Create: `apps/www/lib/utils/native-app-deeplink.test.ts`
+- Modify: `apps/www/app/(home)/handler/after-sign-in/page.tsx`
+
+### Task 2: Generalize The After-Sign-In Page For cmuxterm
 
 **Files:**
-- Create: `Packages/CMUXAuthCore/Package.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthConfig.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthIdentityStore.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthSessionCache.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthState.swift`
-- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthUser.swift`
-- Modify: `GhosttyTabs.xcodeproj/project.pbxproj`
-- Modify: `Package.resolved`
-- Test: `Packages/CMUXAuthCore/Tests/CMUXAuthCoreTests/CMUXAuthStateTests.swift`
+- Create: `apps/www/lib/utils/native-app-deeplink.ts`
+- Modify: `apps/www/app/(home)/handler/after-sign-in/page.tsx`
+- Test: `apps/www/lib/utils/native-app-deeplink.test.ts`
 
-- [ ] **Step 1: Create the local package skeleton**
+- [ ] **Step 1: Add a small helper that validates native cmux callback URLs**
 
-Add:
+Rules:
+- allow `cmux://auth-callback`
+- allow tagged debug schemes matching the cmux debug pattern
+- reject non-cmux schemes
+- keep relative web redirects unchanged
 
-```swift
-// Packages/CMUXAuthCore/Package.swift
-let package = Package(
-    name: "CMUXAuthCore",
-    platforms: [.macOS(.v15)],
-    products: [.library(name: "CMUXAuthCore", targets: ["CMUXAuthCore"])],
-    targets: [
-        .target(name: "CMUXAuthCore"),
-        .testTarget(name: "CMUXAuthCoreTests", dependencies: ["CMUXAuthCore"]),
-    ]
-)
+- [ ] **Step 2: Update the after-sign-in page to use the helper**
+
+Implementation rules:
+- stop hardcoding `manaflow://`
+- keep the existing “fresh session before deeplink” behavior
+- keep relative web redirects working
+- only open native links that pass the helper
+
+- [ ] **Step 3: Run the web tests**
+
+Run:
+
+```bash
+cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex/apps/www && bunx vitest run lib/utils/native-app-deeplink.test.ts
+cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex && bun check
 ```
 
-- [ ] **Step 2: Copy the stable shared auth-core types from iOS**
+Expected: PASS.
 
-Add the exact minimal types already proven in the iOS repo:
-- `CMUXAuthConfig`
-- `CMUXAuthUser`
-- `CMUXAuthIdentityStore`
-- `CMUXAuthSessionCache`
-- `CMUXAuthState`
+- [ ] **Step 4: Commit**
 
-Do not add UI or network code to this package.
+```bash
+cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex
+git add apps/www/lib/utils/native-app-deeplink.ts apps/www/lib/utils/native-app-deeplink.test.ts 'apps/www/app/(home)/handler/after-sign-in/page.tsx'
+git commit -m "auth: allow cmux native callback deeplinks"
+```
 
-- [ ] **Step 3: Add the package to the Xcode project**
+---
 
-Wire `CMUXAuthCore` into the macOS app target through `GhosttyTabs.xcodeproj/project.pbxproj`.
+## Chunk 3: Add Native Auth Foundation And Settings UI In cmuxterm
 
-Do not touch the root `Package.swift`. The app is built from the Xcode project, not the CLI package.
+### File Structure
 
-- [ ] **Step 4: Run the package test**
+**cmux repo:** `/Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in`
+
+- Modify: `GhosttyTabs.xcodeproj/project.pbxproj`
+- Modify: `Package.resolved`
+- Modify: `Resources/Info.plist`
+- Modify: `Resources/Localizable.xcstrings`
+- Modify: `scripts/reload.sh`
+- Modify: `Sources/AppDelegate.swift`
+- Modify: `Sources/cmuxApp.swift`
+- Create: `Packages/CMUXAuthCore/Package.swift`
+- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthConfig.swift`
+- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthState.swift`
+- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthUser.swift`
+- Create: `Packages/CMUXAuthCore/Sources/CMUXAuthCore/CMUXAuthCallbackPayload.swift`
+- Create: `Packages/CMUXAuthCore/Tests/CMUXAuthCoreTests/CMUXAuthStateTests.swift`
+- Create: `Sources/Auth/AuthEnvironment.swift`
+- Create: `Sources/Auth/StackAuthApp.swift`
+- Create: `Sources/Auth/StackAuthTokenStore.swift`
+- Create: `Sources/Auth/AuthCallbackRouter.swift`
+- Create: `Sources/Auth/AuthSettingsStore.swift`
+- Create: `Sources/Auth/AuthManager.swift`
+- Create: `Sources/Auth/AccountSettingsView.swift`
+
+### Task 3: Implement Browser-Based Optional Sign-In
+
+**Files:**
+- Create: `Packages/CMUXAuthCore/...`
+- Create: `Sources/Auth/...`
+- Modify: `Sources/AppDelegate.swift`
+- Modify: `Sources/cmuxApp.swift`
+- Modify: `Resources/Info.plist`
+- Modify: `scripts/reload.sh`
+- Test: `cmuxTests/AuthCallbackRouterTests.swift`
+- Test: `cmuxTests/AuthManagerTests.swift`
+
+- [ ] **Step 1: Port the minimal shared auth-core types**
+
+Include:
+- auth config
+- auth state
+- auth user
+- callback payload parser
+
+Do not put UI or network code into `CMUXAuthCore`.
+
+- [ ] **Step 2: Add StackAuth to the Xcode project and build a custom token store**
+
+Implementation rules:
+- use the Stack Auth Swift prerelease package
+- use a custom token store backed by Keychain-compatible persistence, not browser cookies
+- auth manager must be able to seed tokens from the native callback URL
+- team list comes from `StackClientApp.getUser()` plus `CurrentUser.listTeams()`
+
+- [ ] **Step 3: Add a callback scheme build setting and tagged-build override**
+
+Rules:
+- release default: `cmux`
+- debug default: `cmux-dev`
+- tagged reloads: `cmux-dev-<tag-slug>`
+- `Resources/Info.plist` reads the scheme from a build setting
+- `scripts/reload.sh` passes the override so the browser returns to the tagged build you launched
+
+- [ ] **Step 4: Route native callback URLs through AppDelegate**
+
+Implementation rules:
+- `application(_:open:)` must distinguish auth callback URLs from folder opens
+- auth callbacks go to `AuthManager`
+- non-auth URLs keep existing folder-open behavior
+
+- [ ] **Step 5: Add an Account section to Settings**
+
+Requirements:
+- signed-out state shows a “Sign In in Browser” button
+- signed-in state shows email plus selected team and a sign-out button
+- local terminal behavior remains available when signed out
+- all new user-facing strings are localized in English and Japanese
+
+- [ ] **Step 6: Run unit tests and built-app verification**
 
 Run:
 
 ```bash
 cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && swift test --package-path Packages/CMUXAuthCore
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-auth-foundation -only-testing:cmuxTests/AuthCallbackRouterTests -only-testing:cmuxTests/AuthManagerTests test
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && ./scripts/reload.sh --tag auth-mobile
+plutil -p "$HOME/Library/Developer/Xcode/DerivedData/cmux-auth-mobile/Build/Products/Debug/cmux DEV auth-mobile.app/Contents/Info.plist"
 ```
 
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
-git add Packages/CMUXAuthCore GhosttyTabs.xcodeproj/project.pbxproj Package.resolved
-git commit -m "auth: add shared auth core package"
-```
-
-### Task 3: Add A Thin Auth Bootstrap Route For Native Clients
-
-**Files:**
-- Create: `apps/www/lib/routes/mobile-bootstrap.route.ts`
-- Modify: `apps/www/lib/routes/index.ts`
-- Test: `apps/www/lib/routes/mobile-bootstrap.route.test.ts`
-
-- [ ] **Step 1: Implement the minimal authenticated response shape**
-
-Return:
-
-```ts
-{
-  userId: string;
-  email: string | null;
-  teams: Array<{
-    teamId: string;
-    slug: string | null;
-    displayName: string | null;
-  }>;
-  defaultTeamId: string | null;
-}
-```
-
-Implementation rules:
-- authenticate with `getUserFromRequest`
-- resolve memberships via the existing Convex team helpers, not ad hoc SQL or duplicated team logic
-- default to the first team membership for dogfood
-- return `401` when no valid Stack cookie or bearer token exists
-
-- [ ] **Step 2: Export the route**
-
-Add it to `apps/www/lib/routes/index.ts`.
-
-- [ ] **Step 3: Run the backend test**
-
-Run:
-
-```bash
-cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex/apps/www && bunx vitest run lib/routes/mobile-bootstrap.route.test.ts
-```
-
-Expected: PASS.
-
-- [ ] **Step 4: Run repo typecheck**
-
-Run:
-
-```bash
-cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex && bunx tsc --noEmit -p apps/www/tsconfig.json
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex
-git add apps/www/lib/routes/mobile-bootstrap.route.ts apps/www/lib/routes/index.ts apps/www/lib/routes/mobile-bootstrap.route.test.ts
-git commit -m "www: add native mobile bootstrap route"
-```
-
-## Chunk 3: Add Optional Sign-In To The Swift App
-
-### Task 4: Add The Native Auth Manager Without Gating Local Use
-
-**Files:**
-- Create: `Sources/Auth/AuthEnvironment.swift`
-- Create: `Sources/Auth/StackAuthApp.swift`
-- Create: `Sources/Auth/AuthManager.swift`
-- Create: `Sources/Auth/AuthSettingsStore.swift`
-- Modify: `GhosttyTabs.xcodeproj/project.pbxproj`
-- Modify: `Package.resolved`
-- Test: `cmuxTests/AuthManagerTests.swift`
-
-- [ ] **Step 1: Add the failing restore and sign-out tests**
-
-Add tests for:
-
-```swift
-func testRestoreUsesCachedUserWhenTokensExist() async throws
-func testSignOutClearsUserAndSelectedTeam() async throws
-func testOptionalAuthDoesNotBlockSignedOutState() async throws
-```
-
-- [ ] **Step 2: Add the StackAuth dependency to the app target**
-
-Add the remote package and link it in `GhosttyTabs.xcodeproj/project.pbxproj`.
-
-The manager should use:
-
-```swift
-enum StackAuthApp {
-    static let shared = StackClientApp(
-        projectId: AuthEnvironment.current.stackAuthProjectId,
-        publishableClientKey: AuthEnvironment.current.stackAuthPublishableKey,
-        tokenStore: .keychain
-    )
-}
-```
-
-- [ ] **Step 3: Add the environment wrapper**
-
-`AuthEnvironment.swift` should mirror the proven iOS constants pattern:
-
-```swift
-enum AuthEnvironment {
-    case development
-    case production
-
-    var stackAuthProjectId: String { ... }
-    var stackAuthPublishableKey: String { ... }
-    var apiBaseURL: String { ... }
-}
-```
-
-Use dev/prod constants and allow plist overrides later if needed. Do not hardcode secrets other than the publishable Stack key and public API origins.
-
-- [ ] **Step 4: Implement `AuthManager`**
-
-Requirements:
-- restore cached user and session presence on launch
-- expose `isAuthenticated`, `currentUser`, `selectedTeamID`, `availableTeams`, `isLoading`
-- provide `sendCode(to:)`, `verifyCode(_:)`, `signOut()`, `refreshBootstrap()`
-- clear team selection on sign-out if the previous team is no longer valid
-- never gate the main cmux window when signed out
-
-Use a small protocol boundary for StackAuth calls so `cmuxTests/AuthManagerTests.swift` can use a fake client.
-
-- [ ] **Step 5: Run the focused tests**
-
-Run:
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-auth-manager -only-testing:cmuxTests/AuthManagerTests test
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
-git add Sources/Auth GhosttyTabs.xcodeproj/project.pbxproj Package.resolved cmuxTests/AuthManagerTests.swift
-git commit -m "auth: add optional mac sign-in state"
-```
-
-### Task 5: Add The Settings Account Section And Sign-In Sheet
-
-**Files:**
-- Create: `Sources/Auth/SignInSheetView.swift`
-- Modify: `Sources/cmuxApp.swift`
-- Modify: `Resources/Localizable.xcstrings`
-- Test: `cmuxUITests/SettingsAccountUITests.swift`
-
-- [ ] **Step 1: Add the failing UI test**
-
-Add a UI test that checks both optionality and visibility:
-
-```swift
-func testSettingsShowsSignInButtonWhileSignedOut() throws
-func testSignedOutLaunchStillShowsMainWorkspaceWindow() throws
-```
-
-The second test is important. It proves the sign-in feature did not turn cmux into an auth-gated app.
-
-- [ ] **Step 2: Add the settings section**
-
-In `SettingsView`, add an `Account` section with:
-- current user email/name when signed in
-- selected team picker when signed in and multiple teams exist
-- `Sign In` button when signed out
-- `Sign Out` button when signed in
-- small explanatory text that cloud sync is optional and local terminal use continues signed out
-
-All strings must use `String(localized:defaultValue:)` and be added to `Resources/Localizable.xcstrings`.
-
-- [ ] **Step 3: Add the sign-in sheet**
-
-Use a small native sheet with:
-- email field
-- “Email me a code” action
-- 6-digit code field
-- verify action
-
-Use the same manager methods as iOS:
-
-```swift
-try await authManager.sendCode(to: email)
-try await authManager.verifyCode(code)
-```
-
-Do not add Apple/Google sign-in in this plan.
-
-- [ ] **Step 4: Run the safe local unit coverage**
-
-Run:
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-settings-auth build
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Run the macOS UI test in CI**
-
-Run:
-
-```bash
-gh workflow run test-e2e.yml --repo manaflow-ai/cmux -f ref=feat-cmuxterm-optional-sign-in -f test_filter="SettingsAccountUITests" -f record_video=true
-```
-
-Watch:
-
-```bash
-gh run list --repo manaflow-ai/cmux --workflow test-e2e.yml --limit 3
-gh run watch --repo manaflow-ai/cmux <run-id>
-```
-
-Expected: PASS in GitHub Actions. Do not rely on local XCUITest runs.
-
-- [ ] **Step 6: Commit**
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
-git add Sources/cmuxApp.swift Sources/Auth/SignInSheetView.swift Resources/Localizable.xcstrings cmuxUITests/SettingsAccountUITests.swift
-git commit -m "auth: add optional settings sign-in UI"
-```
-
-## Chunk 4: Publish Signed-In Machine Presence
-
-### Task 6: Add Team Bootstrap And Selection Persistence
-
-**Files:**
-- Create: `Sources/MobilePresence/MobileBootstrapClient.swift`
-- Create: `Sources/Auth/AuthSettingsStore.swift`
-- Test: `cmuxTests/MobileBootstrapClientTests.swift`
-
-- [ ] **Step 1: Add the failing bootstrap-client tests**
-
-Add tests for:
-
-```swift
-func testBootstrapLoadsTeamsWithBearerToken() async throws
-func testBootstrapDefaultsToFirstTeamWhenNoSelectionSaved() async throws
-func testBootstrapPreservesSavedTeamWhenStillPresent() async throws
-```
-
-- [ ] **Step 2: Implement the bootstrap client**
-
-Call:
-
-```swift
-GET /api/mobile/bootstrap
-Authorization: Bearer <stack access token>
-```
-
-Decode:
-
-```swift
-struct MobileBootstrapResponse: Decodable {
-    let userId: String
-    let email: String?
-    let teams: [MobileBootstrapTeam]
-    let defaultTeamId: String?
-}
-```
-
-- [ ] **Step 3: Persist selected team without coupling it to auth tokens**
-
-`AuthSettingsStore` should store only:
-- selected team ID
-- maybe last successful bootstrap timestamp
-
-Do not store access tokens yourself. Let StackAuth own token storage.
-
-- [ ] **Step 4: Run the focused test**
-
-Run:
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-bootstrap-client -only-testing:cmuxTests/MobileBootstrapClientTests test
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
-git add Sources/MobilePresence/MobileBootstrapClient.swift Sources/Auth/AuthSettingsStore.swift cmuxTests/MobileBootstrapClientTests.swift
-git commit -m "auth: bootstrap mobile teams for mac sign-in"
-```
-
-### Task 7: Add Machine Identity And Heartbeat Publishing
-
-**Files:**
-- Create: `Sources/MobilePresence/MobileMachineIdentityService.swift`
-- Create: `Sources/MobilePresence/WorkspaceSnapshotBuilder.swift`
-- Create: `Sources/MobilePresence/MobileHeartbeatPublisher.swift`
-- Modify: `Sources/TabManager.swift`
-- Modify: `Sources/Workspace.swift`
-- Modify: `Sources/AppDelegate.swift`
-- Modify: `Sources/cmuxApp.swift`
-- Test: `cmuxTests/WorkspaceSnapshotBuilderTests.swift`
-- Test: `cmuxTests/MobileHeartbeatPublisherTests.swift`
-
-- [ ] **Step 1: Add the failing snapshot-builder test**
-
-```swift
-func testBuildsWorkspaceRowsFromOpenLocalWorkspaces() throws {
-    let manager = TabManager()
-    let workspace = Workspace.testLocal(name: "MacBook / repo")
-
-    manager.addWorkspaceForTesting(workspace)
-
-    let rows = WorkspaceSnapshotBuilder().build(from: manager)
-    XCTAssertEqual(rows.map(\.title), ["MacBook / repo"])
-}
-```
-
-- [ ] **Step 2: Add the failing heartbeat-publisher test**
-
-```swift
-func testPublisherDoesNothingWhenSignedOut() async throws
-func testPublisherRequestsMachineSessionAndPublishesHeartbeatWhenSignedIn() async throws
-func testPublisherUsesTailscaleHostnameWhenAvailable() async throws
-```
-
-- [ ] **Step 3: Implement machine identity discovery**
-
-`MobileMachineIdentityService` should resolve:
-- stable `machineId` from a persisted UUID, not from `Host.current()`
-- `displayName` from `Host.current().localizedName`
-- `tailscaleHostname` and `tailscaleIPs` by running `tailscale status --json` best-effort
-
-Rules:
-- if Tailscale is unavailable, return empty IPs and `nil` hostname
-- do not crash if the CLI is missing or returns malformed JSON
-
-- [ ] **Step 4: Implement workspace snapshot building**
-
-Extract only the minimum fields needed by `/api/mobile/heartbeat`:
-
-```swift
-struct MobileWorkspaceSnapshot: Encodable {
-    let workspaceId: String
-    let title: String
-    let preview: String?
-    let phase: String
-    let tmuxSessionName: String
-    let lastActivityAt: Int64
-    let latestEventSeq: Int
-    let lastEventAt: Int64?
-}
-```
-
-Do not make the snapshot builder reach into UI-only state or view structs.
-
-- [ ] **Step 5: Implement the publisher**
-
-Behavior:
-- idle when signed out or no team is selected
-- fetch machine session from `/api/mobile/machine-session`
-- publish to `/api/mobile/heartbeat`
-- publish immediately on:
-  - sign-in
-  - team change
-  - app launch
-  - workspace list changes
-  - app becoming active
-- publish periodically with a real heartbeat timer, not sleeps
-
-Signed-out behavior must remain:
-- no network calls
-- no app gating
-- no alerts
-
-- [ ] **Step 6: Run the focused tests**
-
-Run:
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-heartbeat -only-testing:cmuxTests/WorkspaceSnapshotBuilderTests -only-testing:cmuxTests/MobileHeartbeatPublisherTests test
-```
-
-Expected: PASS.
+Expected:
+- package tests pass
+- unit tests pass
+- the built app bundle advertises the tagged auth callback scheme
 
 - [ ] **Step 7: Commit**
 
 ```bash
 cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
-git add Sources/MobilePresence Sources/TabManager.swift Sources/Workspace.swift Sources/AppDelegate.swift Sources/cmuxApp.swift cmuxTests/WorkspaceSnapshotBuilderTests.swift cmuxTests/MobileHeartbeatPublisherTests.swift
-git commit -m "mobile: publish signed-in cmuxterm presence"
+git add GhosttyTabs.xcodeproj/project.pbxproj Package.resolved Resources/Info.plist Resources/Localizable.xcstrings scripts/reload.sh Packages/CMUXAuthCore Sources/Auth Sources/AppDelegate.swift Sources/cmuxApp.swift
+git commit -m "auth: add optional browser sign-in for cmuxterm"
 ```
 
-## Chunk 5: Dogfood Verification
+---
 
-### Task 8: Verify The Optional-Sign-In Dogfood Path
+## Chunk 4: Publish Signed-In Machine And Workspace State
+
+### File Structure
+
+**cmux repo:** `/Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in`
+
+- Create: `Sources/MobilePresence/MachineIdentityStore.swift`
+- Create: `Sources/MobilePresence/TailscaleStatusProvider.swift`
+- Create: `Sources/MobilePresence/MachineSessionClient.swift`
+- Create: `Sources/MobilePresence/WorkspaceSnapshotBuilder.swift`
+- Create: `Sources/MobilePresence/MobileHeartbeatPublisher.swift`
+- Create: `Sources/MobilePresence/MobilePresenceCoordinator.swift`
+- Modify: `Sources/TabManager.swift`
+- Modify: `Sources/Workspace.swift`
+- Modify: `Sources/AppDelegate.swift`
+- Test: `cmuxTests/TailscaleStatusProviderTests.swift`
+- Test: `cmuxTests/WorkspaceSnapshotBuilderTests.swift`
+- Test: `cmuxTests/MobileHeartbeatPublisherTests.swift`
+
+### Task 4: Make A Signed-In Mac Publish Itself Automatically
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-03-17-cmuxterm-optional-sign-in.md` (status note only, after verification)
+- Create: `Sources/MobilePresence/...`
+- Modify: `Sources/TabManager.swift`
+- Modify: `Sources/Workspace.swift`
+- Modify: `Sources/AppDelegate.swift`
 
-- [ ] **Step 1: Run backend verification**
+- [ ] **Step 1: Add a stable machine identity and Tailscale status provider**
+
+Rules:
+- machine identity persists locally
+- display name defaults to the Mac hostname
+- Tailscale data comes from `tailscale status --json`
+- missing Tailscale is not fatal, it just disables remote presence
+
+- [ ] **Step 2: Build workspace snapshots from live cmux state**
+
+Each workspace snapshot must include:
+- workspace id
+- title
+- preview
+- phase
+- tmux session name
+- latest activity timestamps and sequence
+
+- [ ] **Step 3: Add the authenticated machine-session client and heartbeat publisher**
+
+Rules:
+- use the signed-in Stack access token as a bearer token
+- default to the first team membership
+- persist the chosen team in settings so the user can change it later
+- signed-out state is a no-op
+
+- [ ] **Step 4: Add a coordinator that reacts to real app signals**
+
+Use:
+- auth state changes
+- team selection changes
+- workspace open/close/update notifications
+- app active/inactive lifecycle
+
+Do not use arbitrary delays or polling loops.
+
+- [ ] **Step 5: Run unit tests**
 
 Run:
 
 ```bash
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-mobile-presence -only-testing:cmuxTests/TailscaleStatusProviderTests -only-testing:cmuxTests/WorkspaceSnapshotBuilderTests -only-testing:cmuxTests/MobileHeartbeatPublisherTests test
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
+git add Sources/MobilePresence Sources/TabManager.swift Sources/Workspace.swift Sources/AppDelegate.swift
+git commit -m "mobile: publish signed-in machine and workspace state"
+```
+
+---
+
+## Chunk 5: Add Native Zero-Config Direct Attach
+
+### File Structure
+
+**cmux repo:** `/Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in`
+
+- Modify: `daemon/remote/cmd/cmuxd-remote/main.go`
+- Modify: `daemon/remote/cmd/cmuxd-remote/main_test.go`
+- Create: `Sources/DirectAttach/DirectDaemonCertificateStore.swift`
+- Create: `Sources/DirectAttach/MobileDirectDaemonManager.swift`
+- Modify: `Sources/MobilePresence/MobileHeartbeatPublisher.swift`
+- Modify: `Sources/Workspace.swift`
+- Test: `cmuxTests/MobileDirectDaemonManagerTests.swift`
+
+### Task 5: Extend `cmuxd-remote` And Publish `directConnect`
+
+**Files:**
+- Modify: `daemon/remote/cmd/cmuxd-remote/main.go`
+- Create: `Sources/DirectAttach/...`
+- Modify: `Sources/MobilePresence/MobileHeartbeatPublisher.swift`
+- Modify: `Sources/Workspace.swift`
+
+- [ ] **Step 1: Add TLS listener mode to `cmuxd-remote`**
+
+New CLI shape:
+
+```text
+cmuxd-remote serve --tls --listen 0.0.0.0:9443 --server-id <machine-id> --ticket-secret <hex> --cert-file <path> --key-file <path>
+```
+
+Protocol rules:
+- accept a TLS socket
+- read one JSON line with `{ "ticket": "..." }`
+- verify HMAC signature, expiry, server id, and capability set
+- reply with JSON `{ "ok": true }` or `{ "ok": false, "error": { ... } }`
+- after a successful handshake, reuse the existing line-oriented RPC server
+
+- [ ] **Step 2: Add a Swift direct-daemon manager**
+
+Responsibilities:
+- derive hostnames and Tailscale IPs
+- generate and persist a self-signed cert plus ticket secret
+- compute SHA-256 certificate pins
+- spawn `cmuxd-remote`
+- wait for an explicit readiness signal from the process pipe, not `sleep`
+- restart only when machine hosts or binary path change
+
+- [ ] **Step 3: Feed `directConnect` into the heartbeat payload**
+
+The heartbeat payload must include:
+- `directPort`
+- `directTlsPins`
+- `ticketSecret`
+
+Only publish this when the daemon is healthy and the machine has usable Tailscale reachability.
+
+- [ ] **Step 4: Run Go and Swift tests**
+
+Run:
+
+```bash
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in/daemon/remote && go test ./cmd/cmuxd-remote
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-direct-daemon -only-testing:cmuxTests/MobileDirectDaemonManagerTests -only-testing:cmuxTests/MobileHeartbeatPublisherTests test
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
+git add daemon/remote/cmd/cmuxd-remote/main.go daemon/remote/cmd/cmuxd-remote/main_test.go Sources/DirectAttach Sources/MobilePresence/MobileHeartbeatPublisher.swift Sources/Workspace.swift
+git commit -m "mobile: add zero-config direct daemon attach"
+```
+
+---
+
+## Chunk 6: Verify The Dogfood Path End To End
+
+### Task 6: Run Final Verification And Prepare For Review
+
+**Files:**
+- Modify as needed based on verification failures
+- Test: `cmuxUITests/SettingsAccountUITests.swift` if the UI coverage does not exist yet
+
+- [ ] **Step 1: Run the full local verification set**
+
+Run:
+
+```bash
+cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex/apps/www && bunx vitest run lib/utils/native-app-deeplink.test.ts
 cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex && bun check
-cd /Users/lawrence/.config/superpowers/worktrees/manaflow/feat-ios-dogfood-convex/apps/www && bunx vitest run lib/routes/mobile-bootstrap.route.test.ts lib/routes/mobile-machine-session.route.test.ts lib/routes/mobile-heartbeat.route.test.ts
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in/daemon/remote && go test ./cmd/cmuxd-remote
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-auth-final -only-testing:cmuxTests/AuthCallbackRouterTests -only-testing:cmuxTests/AuthManagerTests -only-testing:cmuxTests/TailscaleStatusProviderTests -only-testing:cmuxTests/WorkspaceSnapshotBuilderTests -only-testing:cmuxTests/MobileHeartbeatPublisherTests -only-testing:cmuxTests/MobileDirectDaemonManagerTests test
 ```
 
 Expected: PASS.
 
-- [ ] **Step 2: Run mac package and unit verification**
+- [ ] **Step 2: Add or update a focused UI automation case**
 
-Run:
+Cover:
+- opening Settings
+- tapping “Sign In in Browser”
+- handling a synthetic auth callback
+- showing signed-in account state
 
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && swift test --package-path Packages/CMUXAuthCore
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux-unit -destination 'platform=macOS' -derivedDataPath /tmp/cmux-optional-auth-unit test
-```
-
-Expected: PASS.
-
-- [ ] **Step 3: Run the macOS UI test in CI**
-
-Run:
+Then push the branch and run:
 
 ```bash
 gh workflow run test-e2e.yml --repo manaflow-ai/cmux -f ref=feat-cmuxterm-optional-sign-in -f test_filter="SettingsAccountUITests" -f record_video=true
 ```
 
-Expected: PASS in GitHub Actions.
-
-- [ ] **Step 4: Build and reload a tagged dogfood app**
+- [ ] **Step 3: Run a tagged build and manual dogfood**
 
 Run:
 
 ```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && ./scripts/reload.sh --tag optional-sign-in
+cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in && ./scripts/reload.sh --tag auth-mobile
 ```
 
-Expected: tagged `cmux DEV optional-sign-in.app` launches successfully.
+Manual checks:
+- signed out, local workspace behavior is unchanged
+- sign in opens `cmux.dev`
+- finishing sign in returns to the tagged app
+- the signed-in Mac shows up in the iOS terminal home
+- tapping it opens a workspace directly, without the config sheet
 
-- [ ] **Step 5: Run the manual dogfood checklist**
+- [ ] **Step 4: Fix anything the verification found, rerun the affected tests, and commit**
 
-Checklist:
-- launch signed out and confirm normal local workspaces still work
-- open Settings and confirm the new `Account` section shows a `Sign In` button
-- complete email-code sign-in
-- confirm current user and selected team appear in Settings
-- confirm sign-out returns the app to signed-out state without hiding workspaces
-- confirm the signed-in Mac appears at the top of the iOS `Terminals` screen within one heartbeat cycle
-- confirm opening and closing a local workspace updates the iOS workspace list without duplicates
-- confirm disabling Tailscale does not crash cmuxterm and just removes Tailscale metadata from publishes
+Use focused fix commits. If a regression test was added for a bug uncovered here, keep the test-only commit before the fix commit.
 
-- [ ] **Step 6: Record what is still out of scope**
+- [ ] **Step 5: Complete the branch the normal way**
 
-If dogfood feedback now demands zero-config terminal attach from the newly signed-in Mac, write a second plan for:
-- native direct-daemon publisher
-- ticket-secret management
-- TLS pin generation
-- iOS direct attach without manual host setup
-
-- [ ] **Step 7: Commit any final dogfood-only fixes**
-
-```bash
-cd /Users/lawrence/fun/cmuxterm-hq/worktrees/feat-cmuxterm-optional-sign-in
-git add <files>
-git commit -m "auth: finish optional mac sign-in dogfood flow"
-```
-
-## Notes
-
-- The original `2026-03-16-ios-dogfood-convex-sqlite-tailscale.md` plan did **not** include any cmuxterm Swift app auth or heartbeat-publisher work. That omission is the reason the dogfood flow ended up relying on Electron as the first signed-in desktop surface.
-- Keep sign-in optional. Do not add a launch gate, blocking overlay, or required account step to the main cmux window.
-- Do not add Apple/Google sign-in in this plan. Email-code auth is enough to validate the dogfood loop.
-- Do not use `sleep`, `usleep`, `Task.sleep`, or `DispatchQueue.asyncAfter` as auth/bootstrap timing crutches in runtime code. Use real callbacks, state changes, and notifications.
+After all tests and dogfood checks pass:
+- announce that you are using `finishing-a-development-branch`
+- follow that skill
+- do not merge to `main` unless the user explicitly asks in that turn
