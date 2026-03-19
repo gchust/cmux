@@ -187,6 +187,8 @@ jobs:
           set -euo pipefail
           SOURCE_PACKAGES_DIR="$PWD/.ci-source-packages"
           ONLY_TESTING="-only-testing:cmuxUITests/$TEST_FILTER"
+          OUTPUT_FILE="$(mktemp -t cmux-e2e-output.XXXXXX)"
+          trap 'rm -f "$OUTPUT_FILE"' EXIT
 
           # Start recording right before the test (after build/resolve)
           if [ "$RECORD_VIDEO" = "true" ]; then
@@ -216,19 +218,19 @@ jobs:
           fi
 
           set +e
-          OUTPUT=$(xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux -configuration Debug \
+          xcodebuild -project GhosttyTabs.xcodeproj -scheme cmux -configuration Debug \
             -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
             -disableAutomaticPackageResolution \
             -destination "platform=macOS" \
             -maximum-test-execution-time-allowance "$TEST_TIMEOUT" \
-            $ONLY_TESTING test 2>&1)
+            $ONLY_TESTING test >"$OUTPUT_FILE" 2>&1
           EXIT_CODE=$?
           set -e
 
-          echo "$OUTPUT"
+          cat "$OUTPUT_FILE"
 
           # Save summary for the issue
-          SUMMARY=$(echo "$OUTPUT" | grep -E "(Test Suite|Executed|FAIL|PASS)" | tail -20)
+          SUMMARY=$(grep -E "(Test Suite|Executed|FAIL|PASS)" "$OUTPUT_FILE" | tail -20 || true)
           {
             echo "test_summary<<EOFSUM"
             echo "$SUMMARY"
@@ -242,7 +244,7 @@ jobs:
             # Save full output for the issue body
             {
               echo "test_output<<EOFOUT"
-              echo "$OUTPUT" | tail -200
+              tail -200 "$OUTPUT_FILE"
               echo "EOFOUT"
             } >> "$GITHUB_OUTPUT"
             exit 1
