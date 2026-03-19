@@ -2399,6 +2399,24 @@ final class GhosttyMetalLayer: CAMetalLayer {
 // MARK: - Terminal Surface (owns the ghostty_surface_t lifecycle)
 
 final class TerminalSurface: Identifiable, ObservableObject {
+#if DEBUG
+    private static var debugOcclusionStates: [UUID: Bool] = [:]
+    private static var debugOcclusionObserver: ((UUID, Bool) -> Void)?
+
+    static func setDebugOcclusionObserver(_ observer: ((UUID, Bool) -> Void)?) {
+        debugOcclusionObserver = observer
+    }
+
+    static func resetDebugOcclusionTracking() {
+        debugOcclusionStates.removeAll()
+        debugOcclusionObserver = nil
+    }
+
+    static func debugLastOcclusion(for surfaceId: UUID) -> Bool? {
+        debugOcclusionStates[surfaceId]
+    }
+#endif
+
     final class SearchState: ObservableObject {
         @Published var needle: String
         @Published var selected: UInt?
@@ -2447,6 +2465,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private let maxPendingTextBytes = 1_048_576
     private var backgroundSurfaceStartQueued = false
     private var surfaceCallbackContext: Unmanaged<GhosttySurfaceCallbackContext>?
+    private var desiredOcclusionVisible = true
     private enum PortalLifecycleState: String {
         case live
         case closing
@@ -3143,6 +3162,14 @@ final class TerminalSurface: Identifiable, ObservableObject {
             }
         }
 
+        ghostty_surface_set_occlusion(createdSurface, desiredOcclusionVisible)
+#if DEBUG
+        dlog(
+            "surface.occlusion.bootstrap surface=\(id.uuidString.prefix(5)) " +
+            "visible=\(desiredOcclusionVisible ? 1 : 0)"
+        )
+#endif
+
         flushPendingTextIfNeeded()
 
         // Kick an initial draw after creation/size setup. On some startup paths Ghostty can
@@ -3328,6 +3355,11 @@ final class TerminalSurface: Identifiable, ObservableObject {
     }
 
     func setOcclusion(_ visible: Bool) {
+        desiredOcclusionVisible = visible
+#if DEBUG
+        Self.debugOcclusionStates[id] = visible
+        Self.debugOcclusionObserver?(id, visible)
+#endif
         guard let surface = surface else { return }
         ghostty_surface_set_occlusion(surface, visible)
     }
@@ -5898,6 +5930,7 @@ final class GhosttySurfaceScrollView: NSView {
     private var isLiveScrolling = false
     private var lastSentRow: Int?
     private var isActive = true
+    private var lastAppliedGhosttyVisibility: Bool?
     private var lastFocusRefreshAt: CFTimeInterval = 0
     private var activeDropZone: DropZone?
     private var pendingDropZone: DropZone?
@@ -6405,7 +6438,54 @@ final class GhosttySurfaceScrollView: NSView {
         synchronizeScrollView()
         synchronizeSurfaceView()
         let didCoreSurfaceChange = synchronizeCoreSurface()
+        synchronizeGhosttyVisibility(reason: "host.geometryChanged")
         return !sizeApproximatelyEqual(previousSurfaceSize, targetSize) || didCoreSurfaceChange
+    }
+
+    private static func shouldMarkSurfaceVisibleForGhostty(
+        visibleInUI: Bool,
+        hostHiddenInHierarchy: Bool,
+        surfaceHiddenInHierarchy: Bool,
+        inWindow: Bool,
+        hasUsableGeometry: Bool,
+        windowOcclusionVisible: Bool,
+        windowIsKey: Bool
+    ) -> Bool {
+        guard visibleInUI, inWindow, hasUsableGeometry else { return false }
+        guard !hostHiddenInHierarchy, !surfaceHiddenInHierarchy else { return false }
+        return windowOcclusionVisible || windowIsKey
+    }
+
+    private func synchronizeGhosttyVisibility(reason: String) {
+        guard let terminalSurface = surfaceView.terminalSurface else { return }
+        let windowOcclusionVisible = window?.occlusionState.contains(.visible) ?? false
+        let windowIsKey = window?.isKeyWindow ?? false
+        let visible = Self.shouldMarkSurfaceVisibleForGhostty(
+            visibleInUI: surfaceView.isVisibleInUI,
+            hostHiddenInHierarchy: isHiddenOrHasHiddenAncestor,
+            surfaceHiddenInHierarchy: surfaceView.isHiddenOrHasHiddenAncestor,
+            inWindow: window != nil,
+            hasUsableGeometry: bounds.width > 1 && bounds.height > 1,
+            windowOcclusionVisible: windowOcclusionVisible,
+            windowIsKey: windowIsKey
+        )
+        let stateChanged = lastAppliedGhosttyVisibility != visible
+        lastAppliedGhosttyVisibility = visible
+        guard stateChanged else { return }
+        terminalSurface.setOcclusion(visible)
+#if DEBUG
+        dlog(
+            "surface.occlusion surface=\(terminalSurface.id.uuidString.prefix(5)) " +
+            "visible=\(visible ? 1 : 0) reason=\(reason) " +
+            "visibleInUI=\(surfaceView.isVisibleInUI ? 1 : 0) hostHidden=\(isHiddenOrHasHiddenAncestor ? 1 : 0) " +
+            "surfaceHidden=\(surfaceView.isHiddenOrHasHiddenAncestor ? 1 : 0) " +
+            "inWindow=\(window != nil ? 1 : 0) key=\(windowIsKey ? 1 : 0) " +
+            "occluded=\(windowOcclusionVisible ? 0 : 1) bounds=\(String(format: "%.1fx%.1f", bounds.width, bounds.height))"
+        )
+#endif
+        if visible && !hasRenderableSurfaceContentsForReveal() {
+            refreshSurfaceNow(reason: reason)
+        }
     }
 
     @discardableResult
@@ -6545,6 +6625,7 @@ final class GhosttySurfaceScrollView: NSView {
 #if DEBUG
             dlog("find.window.didBecomeKey surface=\(self.surfaceView.terminalSurface?.id.uuidString.prefix(5) ?? "nil") searchActive=\(searchActive) focusTarget=\(self.searchFocusTarget) firstResponder=\(String(describing: self.window?.firstResponder))")
 #endif
+            self.synchronizeGhosttyVisibility(reason: "window.didBecomeKey")
             self.applyFirstResponderIfNeeded()
             self.refreshSurfaceNow(reason: "window.didBecomeKey")
         })
@@ -6568,15 +6649,27 @@ final class GhosttySurfaceScrollView: NSView {
                 dlog("find.window.didResignKey surface=\(self.surfaceView.terminalSurface?.id.uuidString.prefix(5) ?? "nil") searchActive=\(searchActive) firstResponder=\(String(describing: window.firstResponder)) (not terminal, skipping)")
 #endif
             }
+            self.synchronizeGhosttyVisibility(reason: "window.didResignKey")
+        })
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.synchronizeGhosttyVisibility(reason: "window.didChangeOcclusionState")
         })
         if window.isKeyWindow {
+            synchronizeGhosttyVisibility(reason: "viewDidMoveToWindow.keyWindow")
             applyFirstResponderIfNeeded()
             refreshSurfaceNow(reason: "viewDidMoveToWindow")
+        } else {
+            synchronizeGhosttyVisibility(reason: "viewDidMoveToWindow")
         }
     }
 
     func attachSurface(_ terminalSurface: TerminalSurface) {
         surfaceView.attachSurface(terminalSurface)
+        synchronizeGhosttyVisibility(reason: "attachSurface")
     }
 
     func setFocusHandler(_ handler: (() -> Void)?) {
@@ -6972,6 +7065,7 @@ final class GhosttySurfaceScrollView: NSView {
         let wasVisible = surfaceView.isVisibleInUI
         surfaceView.setVisibleInUI(visible)
         isHidden = !visible
+        synchronizeGhosttyVisibility(reason: "setVisibleInUI")
 #if DEBUG
         if wasVisible != visible {
             let transition = "\(wasVisible ? 1 : 0)->\(visible ? 1 : 0)"
