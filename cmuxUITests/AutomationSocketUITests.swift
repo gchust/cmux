@@ -90,6 +90,7 @@ final class AutomationSocketUITests: XCTestCase {
                 socketV2(
                     method: "surface.send_key",
                     params: [
+                        "window_id": target.windowId,
                         "workspace_id": target.workspaceId,
                         "surface_id": target.surfaceId,
                         "key": "enter",
@@ -107,7 +108,10 @@ final class AutomationSocketUITests: XCTestCase {
 
             guard let payload = socketV2(
                 method: "surface.list",
-                params: ["workspace_id": target.workspaceId],
+                params: [
+                    "window_id": target.windowId,
+                    "workspace_id": target.workspaceId,
+                ],
                 responseTimeout: 4.0
             ),
                   let surfaces = payload["surfaces"] as? [[String: Any]] else {
@@ -204,34 +208,84 @@ final class AutomationSocketUITests: XCTestCase {
         return (response["result"] as? [String: Any]) ?? [:]
     }
 
-    private func ensureTerminalSurface(timeout: TimeInterval) -> (workspaceId: String, surfaceId: String)? {
-        if let target = currentTerminalSurface() {
-            return target
+    private func ensureTerminalSurface(timeout: TimeInterval) -> (windowId: String, workspaceId: String, surfaceId: String)? {
+        let initialWindowId = currentWindowId()
+        if let target = terminalSurface(windowId: initialWindowId) {
+            return (
+                windowId: initialWindowId ?? "",
+                workspaceId: target.workspaceId,
+                surfaceId: target.surfaceId
+            )
         }
 
-        guard let workspacePayload = socketV2(method: "workspace.create", responseTimeout: 4.0),
+        var workspaceCreateParams: [String: Any] = [:]
+        if let initialWindowId, !initialWindowId.isEmpty {
+            workspaceCreateParams["window_id"] = initialWindowId
+        }
+
+        guard let workspacePayload = socketV2(
+            method: "workspace.create",
+            params: workspaceCreateParams,
+            responseTimeout: 4.0
+        ),
               let workspaceId = workspacePayload["workspace_id"] as? String else {
             return nil
         }
+        let windowId = (workspacePayload["window_id"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var workspaceSelectParams: [String: Any] = [
+            "workspace_id": workspaceId,
+        ]
+        if let windowId, !windowId.isEmpty {
+            workspaceSelectParams["window_id"] = windowId
+        }
+        _ = socketV2(method: "workspace.select", params: workspaceSelectParams, responseTimeout: 4.0)
 
         let ready = waitForCondition(timeout: timeout) {
-            self.currentTerminalSurface(workspaceId: workspaceId) != nil
+            self.terminalSurface(windowId: windowId, workspaceId: workspaceId) != nil
         }
         guard ready else { return nil }
-        return currentTerminalSurface(workspaceId: workspaceId)
+        guard let target = terminalSurface(windowId: windowId, workspaceId: workspaceId) else {
+            return nil
+        }
+        return (
+            windowId: windowId ?? initialWindowId ?? "",
+            workspaceId: target.workspaceId,
+            surfaceId: target.surfaceId
+        )
     }
 
-    private func currentTerminalSurface(
+    private func currentWindowId() -> String? {
+        guard let payload = socketV2(method: "window.current", responseTimeout: 3.0),
+              let windowId = payload["window_id"] as? String,
+              !windowId.isEmpty else {
+            return nil
+        }
+        return windowId
+    }
+
+    private func terminalSurface(
+        windowId: String? = nil,
         workspaceId: String? = nil
     ) -> (workspaceId: String, surfaceId: String)? {
         var params: [String: Any] = [:]
+        if let windowId, !windowId.isEmpty {
+            params["window_id"] = windowId
+        }
         if let workspaceId {
             params["workspace_id"] = workspaceId
         }
-        guard let payload = socketV2(method: "surface.current", params: params, responseTimeout: 3.0),
+        guard let payload = socketV2(method: "surface.list", params: params, responseTimeout: 3.0),
               let resolvedWorkspaceId = payload["workspace_id"] as? String,
-              let surfaceId = payload["surface_id"] as? String,
-              !surfaceId.isEmpty else {
+              let surfaces = payload["surfaces"] as? [[String: Any]],
+              let surface = surfaces.first(where: { surface in
+                  guard let surfaceId = surface["id"] as? String, !surfaceId.isEmpty else {
+                      return false
+                  }
+                  let type = surface["type"] as? String
+                  return type == nil || type == "terminal"
+              }),
+              let surfaceId = surface["id"] as? String else {
             return nil
         }
         return (workspaceId: resolvedWorkspaceId, surfaceId: surfaceId)
