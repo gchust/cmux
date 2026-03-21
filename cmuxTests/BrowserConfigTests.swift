@@ -2463,6 +2463,64 @@ final class BrowserReturnKeyDownRoutingTests: XCTestCase {
     }
 }
 
+final class BrowserArrowKeyDownRoutingTests: XCTestCase {
+    func testRoutesForDownArrowWhenBrowserWebViewIsFirstResponder() {
+        let webView = CmuxWebView(frame: .zero, configuration: WKWebViewConfiguration())
+
+        XCTAssertTrue(
+            shouldDispatchBrowserArrowViaFirstResponderKeyDown(
+                keyCode: 125,
+                firstResponder: webView,
+                firstResponderIsBrowser: true,
+                focusedBrowserAddressBarPanelId: nil,
+                flags: []
+            )
+        )
+    }
+
+    func testRoutesForUpArrowWhenBrowserFieldEditorIsFirstResponder() {
+        let fieldEditor = NSTextView(frame: .zero)
+        fieldEditor.isFieldEditor = true
+
+        XCTAssertTrue(
+            shouldDispatchBrowserArrowViaFirstResponderKeyDown(
+                keyCode: 126,
+                firstResponder: fieldEditor,
+                firstResponderIsBrowser: true,
+                focusedBrowserAddressBarPanelId: nil,
+                flags: []
+            )
+        )
+    }
+
+    func testDoesNotRouteWhenBrowserAddressBarRemainsFocused() {
+        let webView = CmuxWebView(frame: .zero, configuration: WKWebViewConfiguration())
+
+        XCTAssertFalse(
+            shouldDispatchBrowserArrowViaFirstResponderKeyDown(
+                keyCode: 125,
+                firstResponder: webView,
+                firstResponderIsBrowser: true,
+                focusedBrowserAddressBarPanelId: UUID(),
+                flags: []
+            )
+        )
+    }
+
+    func testDoesNotRouteForCommandModifiedArrow() {
+        let webView = CmuxWebView(frame: .zero, configuration: WKWebViewConfiguration())
+
+        XCTAssertFalse(
+            shouldDispatchBrowserArrowViaFirstResponderKeyDown(
+                keyCode: 125,
+                firstResponder: webView,
+                firstResponderIsBrowser: true,
+                focusedBrowserAddressBarPanelId: nil,
+                flags: [.command]
+            )
+        )
+    }
+}
 
 final class BrowserZoomShortcutActionTests: XCTestCase {
     func testZoomInSupportsEqualsAndPlusVariants() {

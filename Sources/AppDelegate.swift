@@ -1510,7 +1510,7 @@ func shouldDispatchBrowserReturnViaFirstResponderKeyDown(
     return browserOmnibarShouldSubmitOnReturn(flags: flags)
 }
 
-func shouldDispatchBrowserFieldEditorArrowViaFirstResponderKeyDown(
+func shouldDispatchBrowserArrowViaFirstResponderKeyDown(
     keyCode: UInt16,
     firstResponder: NSResponder?,
     firstResponderIsBrowser: Bool,
@@ -1519,17 +1519,10 @@ func shouldDispatchBrowserFieldEditorArrowViaFirstResponderKeyDown(
 ) -> Bool {
     guard firstResponderIsBrowser else { return false }
     guard focusedBrowserAddressBarPanelId == nil else { return false }
-    guard let textView = firstResponder as? NSTextView, textView.isFieldEditor else {
-        return false
-    }
     let normalizedFlags = browserOmnibarNormalizedModifierFlags(flags)
     guard normalizedFlags == [] else { return false }
-    switch keyCode {
-    case 125, 126:
-        return true
-    default:
-        return false
-    }
+    guard keyCode == 125 || keyCode == 126 else { return false }
+    return firstResponder != nil
 }
 
 func shouldToggleMainWindowFullScreenForCommandControlFShortcut(
@@ -12540,6 +12533,32 @@ private extension NSWindow {
             cmuxFirstResponderGuardContextWindowNumber = previousContextWindowNumber
         }
 
+        if event.type == .keyDown {
+            let firstResponderWebView = self.firstResponder.flatMap {
+                Self.cmuxOwningWebView(for: $0, in: self, event: event)
+            }
+            if shouldDispatchBrowserArrowViaFirstResponderKeyDown(
+                keyCode: event.keyCode,
+                firstResponder: self.firstResponder,
+                firstResponderIsBrowser: firstResponderWebView != nil,
+                focusedBrowserAddressBarPanelId: AppDelegate.shared?.focusedBrowserAddressBarPanelId(),
+                flags: event.modifierFlags
+            ) {
+                let browserArrowTarget: NSResponder?
+                if let textView = self.firstResponder as? NSTextView, textView.isFieldEditor {
+                    browserArrowTarget = textView
+                } else {
+                    browserArrowTarget = firstResponderWebView
+                }
+#if DEBUG
+                let targetType = browserArrowTarget.map { String(describing: type(of: $0)) } ?? "nil"
+                dlog("window.sendEvent browser arrow routed to keyDown target=\(targetType)")
+#endif
+                browserArrowTarget?.keyDown(with: event)
+                return
+            }
+        }
+
         guard shouldSuppressWindowMoveForFolderDrag(window: self, event: event),
               let contentView = self.contentView else {
 #if DEBUG
@@ -12691,17 +12710,24 @@ private extension NSWindow {
             return true
         }
 
-        if shouldDispatchBrowserFieldEditorArrowViaFirstResponderKeyDown(
+        if shouldDispatchBrowserArrowViaFirstResponderKeyDown(
             keyCode: event.keyCode,
             firstResponder: self.firstResponder,
             firstResponderIsBrowser: firstResponderWebView != nil,
             focusedBrowserAddressBarPanelId: AppDelegate.shared?.focusedBrowserAddressBarPanelId(),
             flags: event.modifierFlags
         ) {
+            let browserArrowTarget: NSResponder?
+            if let textView = self.firstResponder as? NSTextView, textView.isFieldEditor {
+                browserArrowTarget = textView
+            } else {
+                browserArrowTarget = firstResponderWebView
+            }
 #if DEBUG
-            dlog("  → browser field editor arrow routed to firstResponder.keyDown")
+            let targetType = browserArrowTarget.map { String(describing: type(of: $0)) } ?? "nil"
+            dlog("  → browser arrow routed to keyDown target=\(targetType)")
 #endif
-            self.firstResponder?.keyDown(with: event)
+            browserArrowTarget?.keyDown(with: event)
             return true
         }
 
