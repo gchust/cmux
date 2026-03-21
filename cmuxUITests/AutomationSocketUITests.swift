@@ -13,22 +13,20 @@ final class AutomationSocketUITests: XCTestCase {
     }
 
     private var socketPath = ""
-    private var diagnosticsPath = ""
     private var ensureTerminalSurfaceFailure = ""
     private let defaultsDomain = "com.cmuxterm.app.debug"
     private let modeKey = "socketControlMode"
     private let legacyKey = "socketControlEnabled"
-    private let launchTag = "ui-tests-automation-socket"
+    private var launchTag = ""
 
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
-        socketPath = "/tmp/cmux-debug-\(UUID().uuidString).sock"
-        diagnosticsPath = "/tmp/cmux-ui-test-diagnostics-\(UUID().uuidString).json"
+        launchTag = "ui-tests-automation-socket-\(UUID().uuidString.prefix(8))"
+        socketPath = "/tmp/cmux-debug-\(launchTag).sock"
         ensureTerminalSurfaceFailure = ""
         resetSocketDefaults()
         removeSocketFile()
-        try? FileManager.default.removeItem(atPath: diagnosticsPath)
     }
 
     func testSocketToggleDisablesAndEnables() {
@@ -40,7 +38,7 @@ final class AutomationSocketUITests: XCTestCase {
         )
 
         guard let resolvedPath = resolveSocketPath(timeout: 5.0) else {
-            XCTFail("Expected control socket to exist. diagnostics=\(loadDiagnostics() ?? [:])")
+            XCTFail("Expected control socket to exist")
             return
         }
         socketPath = resolvedPath
@@ -75,10 +73,7 @@ final class AutomationSocketUITests: XCTestCase {
         )
 
         guard let resolvedPath = resolveSocketPath(timeout: 5.0) else {
-            XCTFail(
-                "Expected control socket to exist for repeated send-key socket test. " +
-                "diagnostics=\(loadDiagnostics() ?? [:])"
-            )
+            XCTFail("Expected control socket to exist for repeated send-key socket test.")
             return
         }
         socketPath = resolvedPath
@@ -86,8 +81,7 @@ final class AutomationSocketUITests: XCTestCase {
         guard let target = ensureTerminalSurface(timeout: 10.0) else {
             XCTFail(
                 "Expected a terminal surface before repeated send-key socket test. " +
-                "socket=\(socketPath) diagnostics=\(loadDiagnostics() ?? [:]) " +
-                "trace=\(ensureTerminalSurfaceFailure)"
+                "socket=\(socketPath) trace=\(ensureTerminalSurfaceFailure)"
             )
             return
         }
@@ -127,9 +121,7 @@ final class AutomationSocketUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += ["-\(modeKey)", mode]
         app.launchEnvironment["CMUX_SOCKET_PATH"] = socketPath
-        app.launchEnvironment["CMUX_ALLOW_SOCKET_OVERRIDE"] = "1"
         app.launchEnvironment["CMUX_UI_TEST_SOCKET_SANITY"] = "1"
-        app.launchEnvironment["CMUX_UI_TEST_DIAGNOSTICS_PATH"] = diagnosticsPath
         // Debug launches require a tag outside reload.sh; provide one in UITests so CI
         // does not fail with "Application ... does not have a process ID".
         app.launchEnvironment["CMUX_TAG"] = launchTag
@@ -646,13 +638,5 @@ final class AutomationSocketUITests: XCTestCase {
 
     private func removeSocketFile() {
         try? FileManager.default.removeItem(atPath: socketPath)
-    }
-
-    private func loadDiagnostics() -> [String: String]? {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: diagnosticsPath)),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
-            return nil
-        }
-        return object
     }
 }
