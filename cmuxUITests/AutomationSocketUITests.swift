@@ -250,7 +250,7 @@ final class AutomationSocketUITests: XCTestCase {
     }
 
     private func socketCommand(_ command: String, responseTimeout: TimeInterval = 2.0) -> String? {
-        NetcatSocketClient(path: socketPath, responseTimeout: responseTimeout).sendLine(command)
+        ControlSocketClient(path: socketPath, responseTimeout: responseTimeout).sendLine(command)
     }
 
     private func ensureTerminalSurface(timeout: TimeInterval) -> (workspaceId: String, surfaceId: String)? {
@@ -558,7 +558,7 @@ final class AutomationSocketUITests: XCTestCase {
         return unique
     }
 
-    private final class NetcatSocketClient {
+    private final class ControlSocketClient {
         private let path: String
         private let responseTimeout: TimeInterval
 
@@ -568,39 +568,108 @@ final class AutomationSocketUITests: XCTestCase {
         }
 
         func sendLine(_ line: String) -> String? {
-            let netcatPath = "/usr/bin/nc"
-            guard FileManager.default.isExecutableFile(atPath: netcatPath) else { return nil }
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            guard fd >= 0 else { return nil }
+            defer { close(fd) }
 
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: netcatPath)
-            process.arguments = ["-U", path, "-w", String(max(1, Int(ceil(responseTimeout))))]
-
-            let inputPipe = Pipe()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardInput = inputPipe
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-
-            do {
-                try process.run()
-            } catch {
-                return nil
+#if os(macOS)
+            var noSigPipe: Int32 = 1
+            _ = withUnsafePointer(to: &noSigPipe) { ptr in
+                setsockopt(
+                    fd,
+                    SOL_SOCKET,
+                    SO_NOSIGPIPE,
+                    ptr,
+                    socklen_t(MemoryLayout<Int32>.size)
+                )
+            }
+#endif
+            var socketTimeout = timeval(
+                tv_sec: Int(responseTimeout.rounded(.down)),
+                tv_usec: Int32(((responseTimeout - floor(responseTimeout)) * 1_000_000).rounded())
+            )
+            _ = withUnsafePointer(to: &socketTimeout) { ptr in
+                setsockopt(
+                    fd,
+                    SOL_SOCKET,
+                    SO_RCVTIMEO,
+                    ptr,
+                    socklen_t(MemoryLayout<timeval>.size)
+                )
+            }
+            _ = withUnsafePointer(to: &socketTimeout) { ptr in
+                setsockopt(
+                    fd,
+                    SOL_SOCKET,
+                    SO_SNDTIMEO,
+                    ptr,
+                    socklen_t(MemoryLayout<timeval>.size)
+                )
             }
 
-            if let data = (line + "\n").data(using: .utf8) {
-                inputPipe.fileHandleForWriting.write(data)
-            }
-            inputPipe.fileHandleForWriting.closeFile()
-            process.waitUntilExit()
+            var addr = sockaddr_un()
+            memset(&addr, 0, MemoryLayout<sockaddr_un>.size)
+            addr.sun_family = sa_family_t(AF_UNIX)
 
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: outputData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !output.isEmpty else {
-                return nil
+            let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
+            let bytes = Array(path.utf8CString)
+            guard bytes.count <= maxLen else { return nil }
+            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+                let raw = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
+                memset(raw, 0, maxLen)
+                for index in 0..<bytes.count {
+                    raw[index] = bytes[index]
+                }
             }
-            return output
+
+            let pathOffset = MemoryLayout<sockaddr_un>.offset(of: \.sun_path) ?? 0
+            let addrLen = socklen_t(pathOffset + bytes.count)
+#if os(macOS)
+            addr.sun_len = UInt8(min(Int(addrLen), 255))
+#endif
+
+            let connected = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    connect(fd, sa, addrLen)
+                }
+            }
+            guard connected == 0 else { return nil }
+
+            let payload = line + "\n"
+            let wrote: Bool = payload.withCString { cstr in
+                var remaining = strlen(cstr)
+                var pointer = UnsafeRawPointer(cstr)
+                while remaining > 0 {
+                    let written = write(fd, pointer, remaining)
+                    if written <= 0 { return false }
+                    remaining -= written
+                    pointer = pointer.advanced(by: written)
+                }
+                return true
+            }
+            guard wrote else { return nil }
+
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            var accumulator = ""
+            while true {
+                let count = read(fd, &buffer, buffer.count)
+                if count < 0 {
+                    let code = errno
+                    if code == EAGAIN || code == EWOULDBLOCK {
+                        break
+                    }
+                    return nil
+                }
+                if count <= 0 { break }
+                if let chunk = String(bytes: buffer[0..<count], encoding: .utf8) {
+                    accumulator.append(chunk)
+                    if let newline = accumulator.firstIndex(of: "\n") {
+                        return String(accumulator[..<newline])
+                    }
+                }
+            }
+
+            return accumulator.isEmpty ? nil : accumulator.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 
