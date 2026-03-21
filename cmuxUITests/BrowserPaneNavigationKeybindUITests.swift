@@ -370,8 +370,9 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             XCTFail("Missing browserPanelId in setup data")
             return
         }
-        guard let cliPath = resolveCmuxCLIPath() else {
-            XCTFail("Expected bundled cmux CLI for browser arrow-key UI test")
+        let cliPaths = resolveCmuxCLIPaths()
+        guard !cliPaths.isEmpty else {
+            XCTFail("Expected cmux CLI for browser arrow-key UI test")
             return
         }
         let browserPane = app.otherElements["BrowserPanelContent.\(browserPanelId)"].firstMatch
@@ -385,7 +386,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         }
 
         let harnessInstall = installBrowserArrowHarness(
-            cliPath: cliPath,
+            cliPaths: cliPaths,
             surfaceId: browserPanelId
         )
         guard let harness = harnessInstall.harness else {
@@ -401,7 +402,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
 
         app.typeKey(XCUIKeyboardKey.downArrow.rawValue, modifierFlags: [])
         guard let baselineDownReport = waitForBrowserArrowReport(
-            cliPath: cliPath,
+            cliPaths: cliPaths,
             surfaceId: browserPanelId,
             timeout: 5.0,
             predicate: { report in
@@ -412,14 +413,14 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         ) else {
             XCTFail(
                 "Expected baseline Down Arrow to reach the primary page input. " +
-                "report=\(String(describing: browserArrowReport(cliPath: cliPath, surfaceId: browserPanelId)))"
+                "report=\(String(describing: browserArrowReport(cliPaths: cliPaths, surfaceId: browserPanelId)))"
             )
             return
         }
 
         app.typeKey(XCUIKeyboardKey.upArrow.rawValue, modifierFlags: [])
         guard let baselineUpReport = waitForBrowserArrowReport(
-            cliPath: cliPath,
+            cliPaths: cliPaths,
             surfaceId: browserPanelId,
             timeout: 5.0,
             predicate: { report in
@@ -430,7 +431,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         ) else {
             XCTFail(
                 "Expected baseline Up Arrow to reach the primary page input. " +
-                "report=\(String(describing: browserArrowReport(cliPath: cliPath, surfaceId: browserPanelId)))"
+                "report=\(String(describing: browserArrowReport(cliPaths: cliPaths, surfaceId: browserPanelId)))"
             )
             return
         }
@@ -449,7 +450,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             .click()
 
         guard let clickedInputReport = waitForBrowserArrowReport(
-            cliPath: cliPath,
+            cliPaths: cliPaths,
             surfaceId: browserPanelId,
             timeout: 5.0,
             predicate: { report in
@@ -458,14 +459,14 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         ) else {
             XCTFail(
                 "Expected clicking the page to focus the secondary page input before sending arrows. " +
-                "report=\(String(describing: browserArrowReport(cliPath: cliPath, surfaceId: browserPanelId)))"
+                "report=\(String(describing: browserArrowReport(cliPaths: cliPaths, surfaceId: browserPanelId)))"
             )
             return
         }
 
         app.typeKey(XCUIKeyboardKey.downArrow.rawValue, modifierFlags: [])
         guard let postCmdLDownReport = waitForBrowserArrowReport(
-            cliPath: cliPath,
+            cliPaths: cliPaths,
             surfaceId: browserPanelId,
             timeout: 5.0,
             predicate: { report in
@@ -477,14 +478,14 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             XCTFail(
                 "Expected Down Arrow after Cmd+L and page click to reach the secondary page input. " +
                 "clickedInputReport=\(clickedInputReport) " +
-                "report=\(String(describing: browserArrowReport(cliPath: cliPath, surfaceId: browserPanelId)))"
+                "report=\(String(describing: browserArrowReport(cliPaths: cliPaths, surfaceId: browserPanelId)))"
             )
             return
         }
 
         app.typeKey(XCUIKeyboardKey.upArrow.rawValue, modifierFlags: [])
         guard let postCmdLUpReport = waitForBrowserArrowReport(
-            cliPath: cliPath,
+            cliPaths: cliPaths,
             surfaceId: browserPanelId,
             timeout: 5.0,
             predicate: { report in
@@ -496,7 +497,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             XCTFail(
                 "Expected Up Arrow after Cmd+L and page click to reach the secondary page input. " +
                 "postCmdLDownReport=\(postCmdLDownReport) " +
-                "report=\(String(describing: browserArrowReport(cliPath: cliPath, surfaceId: browserPanelId)))"
+                "report=\(String(describing: browserArrowReport(cliPaths: cliPaths, surfaceId: browserPanelId)))"
             )
             return
         }
@@ -1223,10 +1224,10 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
     }
 
     private func installBrowserArrowHarness(
-        cliPath: String,
+        cliPaths: [String],
         surfaceId: String
     ) -> BrowserArrowHarnessInstallResult {
-        let readyResult = browserWaitForArrowHarness(cliPath: cliPath, surfaceId: surfaceId)
+        let readyResult = browserWaitForArrowHarness(cliPaths: cliPaths, surfaceId: surfaceId)
         guard readyResult.terminationStatus == 0 else {
             return BrowserArrowHarnessInstallResult(
                 harness: nil,
@@ -1348,7 +1349,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         })();
         """
         let evalResult = executeCmuxCommand(
-            executablePath: cliPath,
+            executablePaths: cliPaths,
             arguments: ["browser", surfaceId, "eval", "--script", script]
         )
         guard evalResult.terminationStatus == 0 else {
@@ -1406,11 +1407,11 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
     }
 
     private func browserWaitForArrowHarness(
-        cliPath: String,
+        cliPaths: [String],
         surfaceId: String
     ) -> (terminationStatus: Int32, stdout: String, stderr: String) {
         executeCmuxCommand(
-            executablePath: cliPath,
+            executablePaths: cliPaths,
             arguments: [
                 "browser",
                 surfaceId,
@@ -1424,14 +1425,14 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
     }
 
     private func waitForBrowserArrowReport(
-        cliPath: String,
+        cliPaths: [String],
         surfaceId: String,
         timeout: TimeInterval,
         predicate: @escaping (BrowserArrowReport) -> Bool
     ) -> BrowserArrowReport? {
         var matchedReport: BrowserArrowReport?
         let didMatch = waitForCondition(timeout: timeout) {
-            guard let report = self.browserArrowReport(cliPath: cliPath, surfaceId: surfaceId) else {
+            guard let report = self.browserArrowReport(cliPaths: cliPaths, surfaceId: surfaceId) else {
                 return false
             }
             guard predicate(report) else { return false }
@@ -1441,9 +1442,9 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         return didMatch ? matchedReport : nil
     }
 
-    private func browserArrowReport(cliPath: String, surfaceId: String, script: String? = nil) -> BrowserArrowReport? {
+    private func browserArrowReport(cliPaths: [String], surfaceId: String, script: String? = nil) -> BrowserArrowReport? {
         let reportScript = script ?? "JSON.stringify(window.cmuxArrowReport ? window.cmuxArrowReport() : null)"
-        guard let raw = browserEval(cliPath: cliPath, surfaceId: surfaceId, script: reportScript),
+        guard let raw = browserEval(cliPaths: cliPaths, surfaceId: surfaceId, script: reportScript),
               let data = raw.data(using: .utf8),
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -1458,9 +1459,9 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         )
     }
 
-    private func browserEval(cliPath: String, surfaceId: String, script: String) -> String? {
+    private func browserEval(cliPaths: [String], surfaceId: String, script: String) -> String? {
         let result = executeCmuxCommand(
-            executablePath: cliPath,
+            executablePaths: cliPaths,
             arguments: ["browser", surfaceId, "eval", "--script", script]
         )
         guard result.terminationStatus == 0 else {
@@ -1469,7 +1470,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         return result.stdout.isEmpty ? nil : result.stdout
     }
 
-    private func resolveCmuxCLIPath() -> String? {
+    private func resolveCmuxCLIPaths() -> [String] {
         let fileManager = FileManager.default
         let env = ProcessInfo.processInfo.environment
         var candidates: [String] = []
@@ -1506,11 +1507,10 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             to: &candidates
         )
 
-        for path in uniquePaths(candidates) {
-            guard fileManager.isExecutableFile(atPath: path) else { continue }
+        return uniquePaths(candidates).compactMap { path in
+            guard fileManager.isExecutableFile(atPath: path) else { return nil }
             return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         }
-        return nil
     }
 
     private func appendCLIPathCandidates(
@@ -1544,38 +1544,64 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         }
     }
 
-    private func executeCmuxCommand(executablePath: String, arguments: [String]) -> (terminationStatus: Int32, stdout: String, stderr: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
+    private func executeCmuxCommand(executablePaths: [String], arguments: [String]) -> (terminationStatus: Int32, stdout: String, stderr: String) {
+        var commandArguments = ["--socket", socketPath]
+        commandArguments.append(contentsOf: arguments)
 
         var environment = ProcessInfo.processInfo.environment
         environment["CMUX_SOCKET_PATH"] = socketPath
-        process.environment = environment
+        environment["CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC"] = "4.0"
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        var lastPermissionFailure: (terminationStatus: Int32, stdout: String, stderr: String)?
+        for executablePath in uniquePaths(executablePaths) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executablePath)
+            process.arguments = commandArguments
+            process.environment = environment
 
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return (
-                terminationStatus: -1,
-                stdout: "",
-                stderr: "Failed to run cmux command: \(error.localizedDescription)"
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                return (
+                    terminationStatus: -1,
+                    stdout: "",
+                    stderr: "Failed to run cmux command: \(error.localizedDescription) (cliPath=\(executablePath))"
+                )
+            }
+
+            let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let stdout = String(data: stdoutData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let stderr = String(data: stderrData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let result: (terminationStatus: Int32, stdout: String, stderr: String) = (
+                process.terminationStatus,
+                stdout,
+                stderr
             )
+
+            if result.terminationStatus == 0 {
+                return result
+            }
+            if stderr.localizedCaseInsensitiveContains("operation not permitted") {
+                lastPermissionFailure = result
+                continue
+            }
+            return result
         }
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        let stdout = String(data: stdoutData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let stderr = String(data: stderrData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return (process.terminationStatus, stdout, stderr)
+        return lastPermissionFailure ?? (
+            terminationStatus: -1,
+            stdout: "",
+            stderr: "cmux CLI command failed without an executable path"
+        )
     }
 
     private func uniquePaths(_ paths: [String]) -> [String] {
