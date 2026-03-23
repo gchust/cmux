@@ -11,6 +11,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 APP_PATH="$TMP_DIR/cmux.app"
 SPARKLE_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
 SPARKLE_VERSION_DIR="$SPARKLE_FRAMEWORK/Versions/B"
+EXTRA_SPARKLE_XPC="$SPARKLE_VERSION_DIR/XPCServices/InstallerStatus.xpc"
 OTHER_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sentry.framework"
 CLI_PATH="$APP_PATH/Contents/Resources/bin/cmux"
 HELPER_PATH="$APP_PATH/Contents/Resources/bin/ghostty"
@@ -24,6 +25,7 @@ fi
 mkdir -p \
   "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc" \
   "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc" \
+  "$EXTRA_SPARKLE_XPC" \
   "$SPARKLE_VERSION_DIR/Updater.app" \
   "$OTHER_FRAMEWORK" \
   "$(dirname "$CLI_PATH")"
@@ -45,6 +47,7 @@ line_number_regex() {
 
 installer_line="$(line_number_regex 'Installer\.xpc$')"
 downloader_line="$(line_number_regex 'Downloader\.xpc$')"
+extra_xpc_line="$(line_number_regex 'InstallerStatus\.xpc$')"
 autoupdate_line="$(line_number_regex '/Autoupdate$')"
 updater_line="$(line_number_regex 'Updater\.app$')"
 sparkle_line="$(line_number_regex 'Sparkle\.framework$')"
@@ -54,7 +57,7 @@ helper_line="$(line_number_regex '/Resources/bin/ghostty$')"
 app_line="$(line_number_regex '--entitlements cmux\.entitlements .*/cmux\.app$')"
 verify_line="$(line_number_regex '--verify --deep --strict --verbose=2 .*/cmux\.app$')"
 
-for value_name in installer_line downloader_line autoupdate_line updater_line sparkle_line sentry_line cli_line helper_line app_line verify_line; do
+for value_name in installer_line downloader_line extra_xpc_line autoupdate_line updater_line sparkle_line sentry_line cli_line helper_line app_line verify_line; do
   if [ -z "${!value_name}" ]; then
     echo "FAIL: expected $value_name in signing plan"
     printf '%s\n' "$OUTPUT"
@@ -62,7 +65,7 @@ for value_name in installer_line downloader_line autoupdate_line updater_line sp
   fi
 done
 
-if [ "$installer_line" -ge "$sparkle_line" ] || [ "$downloader_line" -ge "$sparkle_line" ] || [ "$autoupdate_line" -ge "$sparkle_line" ] || [ "$updater_line" -ge "$sparkle_line" ]; then
+if [ "$installer_line" -ge "$sparkle_line" ] || [ "$downloader_line" -ge "$sparkle_line" ] || [ "$extra_xpc_line" -ge "$sparkle_line" ] || [ "$autoupdate_line" -ge "$sparkle_line" ] || [ "$updater_line" -ge "$sparkle_line" ]; then
   echo "FAIL: Sparkle nested components must be signed before Sparkle.framework"
   exit 1
 fi
@@ -72,7 +75,7 @@ if [ "$sparkle_line" -ge "$sentry_line" ] || [ "$sentry_line" -ge "$cli_line" ] 
   exit 1
 fi
 
-for sparkle_component in Installer.xpc Downloader.xpc /Autoupdate Updater.app Sparkle.framework Sentry.framework; do
+for sparkle_component in Installer.xpc Downloader.xpc InstallerStatus.xpc /Autoupdate Updater.app Sparkle.framework Sentry.framework; do
   if printf '%s\n' "$OUTPUT" | grep -F "$sparkle_component" | grep -Fq -- '--entitlements'; then
     echo "FAIL: $sparkle_component must not be signed with app entitlements"
     exit 1

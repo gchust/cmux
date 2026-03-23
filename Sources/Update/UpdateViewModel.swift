@@ -345,10 +345,10 @@ class UpdateViewModel: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
-    static func manualDownloadURL(for error: Swift.Error) -> URL? {
+    static func manualDownloadURL(for error: Swift.Error, infoFeedURLString: String? = nil) -> URL? {
         let nsError = error as NSError
         guard shouldOfferManualDownload(for: nsError) else { return nil }
-        let infoFeedURL = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
+        let infoFeedURL = infoFeedURLString ?? (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String)
         let isNightly = UpdateFeedResolver.resolvedFeedURLString(infoFeedURL: infoFeedURL).isNightly
         return URL(string: isNightly ? manualDownloadNightlyDMGURLString : manualDownloadDMGURLString)
     }
