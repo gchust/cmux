@@ -978,6 +978,22 @@ final class UpdateViewModelPresentationTests: XCTestCase {
         )
     }
 
+    func testSparkleInstallationErrorDetailsUseSparkleCodeName() {
+        let error = NSError(
+            domain: SUSparkleErrorDomain,
+            code: 4005,
+            userInfo: [NSLocalizedDescriptionKey: "Failed to create installation cache directory"]
+        )
+
+        let details = UpdateViewModel.errorDetails(
+            for: error,
+            technicalDetails: nil,
+            feedURLString: nil
+        )
+
+        XCTAssertTrue(details.contains("Code: SUInstallationError (4005)"))
+    }
+
     func testNetworkErrorDoesNotOfferManualDownloadURL() {
         let error = NSError(
             domain: NSURLErrorDomain,

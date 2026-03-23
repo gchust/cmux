@@ -5,6 +5,7 @@ import Sparkle
 
 class UpdateViewModel: ObservableObject {
     static let manualDownloadDMGURLString = "https://github.com/manaflow-ai/cmux/releases/latest/download/cmux-macos.dmg"
+    static let manualDownloadNightlyDMGURLString = "https://github.com/manaflow-ai/cmux/releases/download/nightly/cmux-nightly-macos.dmg"
 
     @Published var state: UpdateState = .idle
     @Published var overrideState: UpdateState?
@@ -347,7 +348,9 @@ class UpdateViewModel: ObservableObject {
     static func manualDownloadURL(for error: Swift.Error) -> URL? {
         let nsError = error as NSError
         guard shouldOfferManualDownload(for: nsError) else { return nil }
-        return URL(string: manualDownloadDMGURLString)
+        let infoFeedURL = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
+        let isNightly = UpdateFeedResolver.resolvedFeedURLString(infoFeedURL: infoFeedURL).isNightly
+        return URL(string: isNightly ? manualDownloadNightlyDMGURLString : manualDownloadDMGURLString)
     }
 
     private static func networkError(from error: NSError) -> NSError? {
@@ -367,6 +370,14 @@ class UpdateViewModel: ObservableObject {
         case 2: return "SUInsufficientSigningError"
         case 3: return "SUInsecureFeedURLError"
         case 4: return "SUInvalidFeedURLError"
+        case 4000: return "SUFileCopyFailure"
+        case 4001: return "SUAuthenticationFailure"
+        case 4002: return "SUMissingUpdateError"
+        case 4003: return "SUMissingInstallerToolError"
+        case 4004: return "SURelaunchError"
+        case 4005: return "SUInstallationError"
+        case 4010: return "SUAgentInvalidationError"
+        case 4012: return "SUInstallationWriteNoPermissionError"
         case 1000: return "SUAppcastParseError"
         case 1001: return "SUNoUpdateError"
         case 1002: return "SUAppcastError"

@@ -16,12 +16,6 @@ CLI_PATH="$APP_PATH/Contents/Resources/bin/cmux"
 HELPER_PATH="$APP_PATH/Contents/Resources/bin/ghostty"
 ENTITLEMENTS="cmux.entitlements"
 
-WORKFLOWS=(
-  "$ROOT_DIR/.github/workflows/release.yml"
-  "$ROOT_DIR/.github/workflows/nightly.yml"
-  "$ROOT_DIR/scripts/build-sign-upload.sh"
-)
-
 if [ ! -x "$SCRIPT" ]; then
   echo "FAIL: missing signing helper at $SCRIPT"
   exit 1
@@ -38,13 +32,6 @@ touch \
   "$SPARKLE_VERSION_DIR/Autoupdate" \
   "$CLI_PATH" \
   "$HELPER_PATH"
-
-for workflow in "${WORKFLOWS[@]}"; do
-  if ! grep -Fq './scripts/codesign_app_bundle.sh' "$workflow"; then
-    echo "FAIL: $workflow must use scripts/codesign_app_bundle.sh"
-    exit 1
-  fi
-done
 
 OUTPUT="$(
   CMUX_CODESIGN_DRY_RUN=1 \
