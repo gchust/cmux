@@ -510,14 +510,26 @@ struct BrowserPanelView: View {
             guard let webView = note.object as? CmuxWebView else { return false }
             return webView === panel?.webView
         }) { _ in
+            let shouldDismissOmnibar = browserWebViewClickShouldDismissOmnibar(
+                localAddressBarFocused: addressBarFocused,
+                focusedAddressBarPanelId: AppDelegate.shared?.focusedBrowserAddressBarPanelId(),
+                pendingAddressBarFocusRequestId: panel.pendingAddressBarFocusRequestId,
+                panelId: panel.id
+            )
+            let shouldPromoteWebViewFocus = browserWebViewClickShouldPromoteWebViewFocus(
+                isPanelFocused: isFocused,
+                shouldDismissOmnibar: shouldDismissOmnibar
+            )
 #if DEBUG
             dlog(
                 "browser.focus.clickIntent panel=\(panel.id.uuidString.prefix(5)) " +
                 "isFocused=\(isFocused ? 1 : 0) " +
-                "addressFocused=\(addressBarFocused ? 1 : 0)"
+                "addressFocused=\(addressBarFocused ? 1 : 0) " +
+                "dismissOmnibar=\(shouldDismissOmnibar ? 1 : 0) " +
+                "promoteWeb=\(shouldPromoteWebViewFocus ? 1 : 0)"
             )
 #endif
-            if addressBarFocused {
+            if shouldDismissOmnibar {
 #if DEBUG
                 logBrowserFocusState(event: "addressBarFocus.webViewClickBlur")
 #endif
@@ -525,12 +537,13 @@ struct BrowserPanelView: View {
                     name: .browserWillBlurAddressBarForWebViewClick,
                     object: panel.id
                 )
+            }
+            if shouldPromoteWebViewFocus {
                 panel.prepareForExplicitWebViewFocus(
-                    isPanelFocused: isFocused,
+                    isPanelFocused: true,
                     reason: "webView.clickIntent"
                 )
-                if isFocused,
-                   let window = panel.webView.window,
+                if let window = panel.webView.window,
                    !panel.webView.isHiddenOrHasHiddenAncestor {
                     let focusedWebView = window.makeFirstResponder(panel.webView)
                     if focusedWebView {
@@ -543,6 +556,8 @@ struct BrowserPanelView: View {
                     )
 #endif
                 }
+            }
+            if shouldDismissOmnibar {
                 setAddressBarFocused(false, reason: "webView.clickIntent")
             }
             if !isFocused {
@@ -3196,6 +3211,24 @@ func browserOmnibarShouldReacquireFocusAfterEndEditing(
     explicitPointerBlurIntent: Bool = false
 ) -> Bool {
     desiredOmnibarFocus && !nextResponderIsOtherTextField && !explicitPointerBlurIntent
+}
+
+func browserWebViewClickShouldDismissOmnibar(
+    localAddressBarFocused: Bool,
+    focusedAddressBarPanelId: UUID?,
+    pendingAddressBarFocusRequestId: UUID?,
+    panelId: UUID
+) -> Bool {
+    localAddressBarFocused ||
+        focusedAddressBarPanelId == panelId ||
+        pendingAddressBarFocusRequestId != nil
+}
+
+func browserWebViewClickShouldPromoteWebViewFocus(
+    isPanelFocused: Bool,
+    shouldDismissOmnibar: Bool
+) -> Bool {
+    isPanelFocused || shouldDismissOmnibar
 }
 
 private final class OmnibarNativeTextField: NSTextField {
