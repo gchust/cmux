@@ -9,6 +9,7 @@ DMG_PATH="${REPRO_DIR}/cmux-macos.dmg"
 MOUNT_DIR="${REPRO_DIR}/mount"
 APP_PATH="${REPRO_DIR}/cmux.app"
 APP_BINARY="${APP_PATH}/Contents/MacOS/cmux"
+APP_CLI="${APP_PATH}/Contents/Resources/bin/cmux"
 APP_LOG="${ARTIFACT_DIR}/app.log"
 CLI_LOG="${ARTIFACT_DIR}/cli.log"
 RESULT_LOG="${ARTIFACT_DIR}/result.txt"
@@ -130,8 +131,10 @@ install_release_app() {
   ditto "${mounted_app}" "${APP_PATH}"
   xattr -dr com.apple.quarantine "${APP_PATH}" 2>/dev/null || true
   [[ -x "${APP_BINARY}" ]] || fail "Installed app binary not found at ${APP_BINARY}"
+  [[ -x "${APP_CLI}" ]] || fail "Bundled CLI not found at ${APP_CLI}"
   {
     echo "app_binary=${APP_BINARY}"
+    echo "app_cli=${APP_CLI}"
     echo "app_archs=$(lipo -archs "${APP_BINARY}" 2>/dev/null || file "${APP_BINARY}")"
     echo "bundle_id=$(defaults read "${APP_PATH}/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || echo unknown)"
     echo "bundle_version=$(defaults read "${APP_PATH}/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo unknown)"
@@ -159,7 +162,7 @@ wait_for_process_launch() {
 
 run_cli_json() {
   local output_path="$1"
-  CMUX_CLI_SENTRY_DISABLED=1 "${APP_BINARY}" --json list-panes > "${output_path}" 2>> "${CLI_LOG}"
+  CMUX_CLI_SENTRY_DISABLED=1 "${APP_CLI}" --json list-panes > "${output_path}" 2>> "${CLI_LOG}"
 }
 
 wait_for_cli_ready() {
