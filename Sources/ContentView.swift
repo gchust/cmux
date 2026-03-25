@@ -5136,6 +5136,12 @@ struct ContentView: View {
             return .splitDown
         case "palette.toggleSplitZoom":
             return .toggleSplitZoom
+        case "palette.newPane":
+            return .newPane
+        case "palette.widenPane":
+            return .widenPane
+        case "palette.narrowPane":
+            return .narrowPane
         case "palette.triggerFlash":
             return .triggerFlash
         default:
@@ -5936,6 +5942,32 @@ struct ContentView: View {
                 subtitle: constant(String(localized: "command.terminalSplitBrowserDown.subtitle", defaultValue: "Terminal Layout")),
                 keywords: ["terminal", "split", "browser", "down"],
                 when: { $0.bool(CommandPaletteContextKeys.panelIsTerminal) }
+            )
+        )
+        contributions.append(
+            CommandPaletteCommandContribution(
+                commandId: "palette.newPane",
+                title: constant(String(localized: "command.newPane.title", defaultValue: "New Pane")),
+                subtitle: constant(String(localized: "command.newPane.subtitle", defaultValue: "Pane Layout")),
+                keywords: ["pane", "new", "paper", "niri"]
+            )
+        )
+        contributions.append(
+            CommandPaletteCommandContribution(
+                commandId: "palette.widenPane",
+                title: constant(String(localized: "command.widenPane.title", defaultValue: "Widen Pane")),
+                subtitle: constant(String(localized: "command.widenPane.subtitle", defaultValue: "Pane Layout")),
+                keywords: ["pane", "widen", "wider", "resize", "grow"],
+                when: { $0.bool(CommandPaletteContextKeys.workspaceHasSplits) }
+            )
+        )
+        contributions.append(
+            CommandPaletteCommandContribution(
+                commandId: "palette.narrowPane",
+                title: constant(String(localized: "command.narrowPane.title", defaultValue: "Narrow Pane")),
+                subtitle: constant(String(localized: "command.narrowPane.subtitle", defaultValue: "Pane Layout")),
+                keywords: ["pane", "narrow", "narrower", "resize", "shrink"],
+                when: { $0.bool(CommandPaletteContextKeys.workspaceHasSplits) }
             )
         )
         contributions.append(
