@@ -149,6 +149,15 @@ private struct PaperPaneContainerView<Content: View, EmptyContent: View>: View {
                 }
             }
         }
+        .overlay(alignment: .leading) {
+            // Border on the left edge (except first pane)
+            if let paneIndex = controller.paneIndex(pane.id),
+               paneIndex > 0 {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 1)
+            }
+        }
         .overlay(alignment: .trailing) {
             // Resize handle on the right edge (except for the last pane)
             if let paneIndex = controller.paneIndex(pane.id),
