@@ -1297,6 +1297,12 @@ final class WindowTerminalPortal: NSObject {
         let frameInWindow = effectiveAnchorFrameInWindow(for: anchorView)
         let frameInHostRaw = hostView.convert(frameInWindow, from: nil)
         let frameInHost = Self.pixelSnappedRect(frameInHostRaw, in: hostView)
+        // Unclamped frame: full anchor size without ancestor intersection.
+        // Used for the hosted view's actual frame so terminal dimensions
+        // stay stable during viewport scrolling.
+        let rawInWindow = anchorView.convert(anchorView.bounds, to: nil)
+        let unclampedInHostRaw = hostView.convert(rawInWindow, from: nil)
+        let unclampedFrameInHost = Self.pixelSnappedRect(unclampedInHostRaw, in: hostView)
 #if DEBUG
         logBonsplitContainerFrameIfNeeded(anchorView: anchorView, hostedView: hostedView)
 #endif
@@ -1465,19 +1471,21 @@ final class WindowTerminalPortal: NSObject {
         }
 
         if hasFiniteFrame {
-            let sizeChanged = abs(oldFrame.width - targetFrame.width) > 1 ||
-                              abs(oldFrame.height - targetFrame.height) > 1
-            let positionChanged = !Self.rectApproximatelyEqual(oldFrame, targetFrame)
+            // Use the full unclamped frame for the hosted view. The host
+            // view's masksToBounds clips visually. This prevents terminal
+            // resize during viewport scrolling.
+            let unclampedFrame = unclampedFrameInHost
+            let sizeChanged = abs(oldFrame.width - unclampedFrame.width) > 1 ||
+                              abs(oldFrame.height - unclampedFrame.height) > 1
+            let positionChanged = !Self.rectApproximatelyEqual(oldFrame, unclampedFrame)
+
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             if positionChanged {
-                hostedView.frame = targetFrame
+                hostedView.frame = unclampedFrame
             }
             if sizeChanged {
-                // Only update bounds (which drives terminal resize) when the
-                // actual pane size changed, not during viewport scrolling
-                // where only the visible clip region changes.
-                let expectedBounds = NSRect(origin: .zero, size: targetFrame.size)
+                let expectedBounds = NSRect(origin: .zero, size: unclampedFrame.size)
                 if !Self.rectApproximatelyEqual(hostedView.bounds, expectedBounds) {
                     hostedView.bounds = expectedBounds
                 }
