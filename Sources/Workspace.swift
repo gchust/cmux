@@ -6961,15 +6961,25 @@ final class Workspace: Identifiable, ObservableObject {
         preferredPanelId: UUID? = nil,
         inPane preferredPaneId: PaneID? = nil
     ) -> ghostty_surface_config_s? {
+        var staleRootedFontFallback: Float?
+
         // Walk candidates in priority order and use the first panel with a live surface.
         // This avoids returning nil when the top candidate exists but is not attached yet.
         for terminalPanel in terminalPanelConfigInheritanceCandidates(
             preferredPanelId: preferredPanelId,
             inPane: preferredPaneId
         ) {
+            let rootedFontFallback = terminalInheritanceFontPointsByPanelId[terminalPanel.id]
             guard let sourceSurface = terminalPanel.surface.liveSurfaceForGhosttyAccess(
                 reason: "workspace.inheritedTerminalConfig"
-            ) else { continue }
+            ) else {
+                if staleRootedFontFallback == nil,
+                   let rootedFontFallback,
+                   rootedFontFallback > 0 {
+                    staleRootedFontFallback = rootedFontFallback
+                }
+                continue
+            }
             var config = cmuxInheritedSurfaceConfig(
                 sourceSurface: sourceSurface,
                 context: GHOSTTY_SURFACE_CONTEXT_SPLIT
@@ -6989,12 +6999,13 @@ final class Workspace: Identifiable, ObservableObject {
             return config
         }
 
-        if let fallbackFontPoints = lastTerminalConfigInheritanceFontPoints {
+        if let fallbackFontPoints = staleRootedFontFallback ?? lastTerminalConfigInheritanceFontPoints {
             var config = ghostty_surface_config_new()
             config.font_size = fallbackFontPoints
 #if DEBUG
+            let fallbackSource = staleRootedFontFallback != nil ? "quarantinedRootedFont" : "lastKnownFont"
             dlog(
-                "zoom.inherit fallback=lastKnownFont context=split font=\(String(format: "%.2f", fallbackFontPoints))"
+                "zoom.inherit fallback=\(fallbackSource) context=split font=\(String(format: "%.2f", fallbackFontPoints))"
             )
 #endif
             return config

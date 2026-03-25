@@ -2662,16 +2662,12 @@ final class TerminalSurfaceRegistry {
         runtimeSurfaceOwners[UInt(bitPattern: surface)] = ownerId
     }
 
-    func unregisterRuntimeSurface(_ surface: ghostty_surface_t) {
+    func unregisterRuntimeSurface(_ surface: ghostty_surface_t, ownerId: UUID) {
         lock.lock()
         defer { lock.unlock() }
-        runtimeSurfaceOwners.removeValue(forKey: UInt(bitPattern: surface))
-    }
-
-    func ownsRuntimeSurface(_ surface: ghostty_surface_t, ownerId: UUID) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return runtimeSurfaceOwners[UInt(bitPattern: surface)] == ownerId
+        let key = UInt(bitPattern: surface)
+        guard runtimeSurfaceOwners[key] == ownerId else { return }
+        runtimeSurfaceOwners.removeValue(forKey: key)
     }
 
     func runtimeSurfaceOwnerId(_ surface: ghostty_surface_t) -> UUID? {
@@ -2960,17 +2956,17 @@ final class TerminalSurface: Identifiable, ObservableObject {
         guard hasLiveSurface, let surface else { return nil }
         let registry = TerminalSurfaceRegistry.shared
         let registeredOwnerId = registry.runtimeSurfaceOwnerId(surface)
-        let registeredOwnerToken = registeredOwnerId.map { String($0.uuidString.prefix(5)) } ?? "nil"
         guard registeredOwnerId == id,
               cmuxSurfacePointerAppearsLive(surface) else {
             let callbackContext = surfaceCallbackContext
             surfaceCallbackContext = nil
-            registry.unregisterRuntimeSurface(surface)
+            registry.unregisterRuntimeSurface(surface, ownerId: id)
             self.surface = nil
             activePortalHostLease = nil
             recordTeardownRequest(reason: reason)
             markPortalLifecycleClosed(reason: reason)
 #if DEBUG
+            let registeredOwnerToken = registeredOwnerId.map { String($0.uuidString.prefix(5)) } ?? "nil"
             dlog(
                 "surface.lifecycle.stale surface=\(id.uuidString.prefix(5)) " +
                 "workspace=\(tabId.uuidString.prefix(5)) reason=\(reason) " +
@@ -3169,7 +3165,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
         let surfaceToFree = surface
         if let surfaceToFree {
-            TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree)
+            TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree, ownerId: id)
         }
         surface = nil
 
@@ -3905,7 +3901,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             return
         }
 
-        TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree)
+        TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree, ownerId: id)
         surface = nil
         ghostty_surface_free(surfaceToFree)
         callbackContext?.release()
@@ -3925,7 +3921,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             return
         }
 
-        TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree)
+        TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree, ownerId: id)
         ghostty_surface_free(surfaceToFree)
         runtimeSurfaceFreedOutOfBandForTesting = true
         callbackContext?.release()
@@ -3944,7 +3940,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
         // rather than passing a freed pointer to ghostty_surface_refresh (#432).
         let surfaceToFree = surface
         if let surfaceToFree {
-            TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree)
+            TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree, ownerId: id)
         }
         surface = nil
 

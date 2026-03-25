@@ -792,6 +792,21 @@ final class WorkspaceTeardownTests: XCTestCase {
 
 @MainActor
 final class WorkspaceSplitWorkingDirectoryTests: XCTestCase {
+    private func waitForCondition(
+        timeout: TimeInterval = 2,
+        pollInterval: TimeInterval = 0.01,
+        _ condition: () -> Bool
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(pollInterval))
+        }
+        return condition()
+    }
+
     private func hostTerminalPanelInWindow(_ panel: TerminalPanel) throws -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
@@ -810,7 +825,12 @@ final class WorkspaceSplitWorkingDirectoryTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         window.displayIfNeeded()
         contentView.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(
+            waitForCondition {
+                panel.surface.surface != nil
+            },
+            "Expected runtime surface to materialize after hosting panel in a window"
+        )
         return window
     }
 
