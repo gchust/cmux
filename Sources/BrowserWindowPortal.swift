@@ -2229,23 +2229,15 @@ final class WindowBrowserPortal: NSObject {
             frameInContainer.size.height.isFinite
         guard hasFiniteFrame else { return false }
 
-        // Offset by sidebar width so masksToBounds clips at the sidebar edge
-        let sidebarW = PaperLayoutController.sidebarWidth
-        let adjustedFrame = NSRect(
-            x: frameInContainer.origin.x + sidebarW,
-            y: frameInContainer.origin.y,
-            width: max(0, frameInContainer.width - sidebarW),
-            height: frameInContainer.height
-        )
-        if !Self.rectApproximatelyEqual(hostView.frame, adjustedFrame) {
+        if !Self.rectApproximatelyEqual(hostView.frame, frameInContainer) {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            hostView.frame = adjustedFrame
+            hostView.frame = frameInContainer
             CATransaction.commit()
 #if DEBUG
             dlog(
                 "browser.portal.hostFrame.update host=\(browserPortalDebugToken(hostView)) " +
-                "frame=\(browserPortalDebugFrame(adjustedFrame)) sidebarW=\(Int(sidebarW))"
+                "frame=\(browserPortalDebugFrame(frameInContainer))"
             )
 #endif
         }

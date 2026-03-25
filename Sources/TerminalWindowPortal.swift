@@ -787,12 +787,8 @@ final class WindowTerminalPortal: NSObject {
                 container.addSubview(hostView, positioned: .above, relativeTo: reference)
             }
 
-            // Offset the leading edge by the sidebar width so the host
-            // view starts at the sidebar boundary. masksToBounds then clips
-            // terminals at the sidebar edge instead of the window edge.
-            let sidebarOffset = PaperLayoutController.sidebarWidth
             installConstraints = [
-                hostView.leadingAnchor.constraint(equalTo: reference.leadingAnchor, constant: sidebarOffset),
+                hostView.leadingAnchor.constraint(equalTo: reference.leadingAnchor),
                 hostView.trailingAnchor.constraint(equalTo: reference.trailingAnchor),
                 hostView.topAnchor.constraint(equalTo: reference.topAnchor),
                 hostView.bottomAnchor.constraint(equalTo: reference.bottomAnchor),
@@ -1479,10 +1475,6 @@ final class WindowTerminalPortal: NSObject {
         }
 
         if hasFiniteFrame {
-            // Use the unclamped frame for both position and size. The host
-            // view itself is offset to start at the sidebar boundary, so its
-            // masksToBounds clips terminals at the sidebar edge. Terminal
-            // coordinates are in host-view space (0 = sidebar edge).
             let stableFrame = unclampedFrameInHost
             let sizeChanged = abs(oldFrame.width - stableFrame.width) > 1 ||
                               abs(oldFrame.height - stableFrame.height) > 1
