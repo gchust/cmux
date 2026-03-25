@@ -2304,13 +2304,6 @@ final class WindowBrowserPortal: NSObject {
     /// portal locked to the pane the user can actually see.
     private func effectiveAnchorFrameInWindow(for anchorView: NSView) -> NSRect {
         var frameInWindow = anchorView.convert(anchorView.bounds, to: nil)
-
-        // Paper layout offset compensation (same as TerminalWindowPortal)
-        let paperOffset = PaperLayoutController.currentViewportOffset
-        if paperOffset != 0 {
-            frameInWindow.origin.x -= paperOffset
-        }
-
         var current = anchorView.superview
         while let ancestor = current {
             let ancestorBoundsInWindow = ancestor.convert(ancestor.bounds, to: nil)

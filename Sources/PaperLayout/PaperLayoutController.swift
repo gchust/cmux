@@ -152,7 +152,6 @@ public final class PaperLayoutController {
     /// animated scrolls so the portal stays in sync with the visual position.
     var viewportOffset: CGFloat = 0 {
         didSet {
-            Self.currentViewportOffset = viewportOffset
             if viewportOffset != oldValue {
                 notifyGeometryChange()
             }
@@ -164,8 +163,9 @@ public final class PaperLayoutController {
     private var animationStartTime: CFTimeInterval = 0
     private var animationTimer: DispatchSourceTimer?
 
-    /// Global viewport offset readable by the portal system.
-    @MainActor static var currentViewportOffset: CGFloat = 0
+    // Note: viewport offset compensation in the portal system is NOT needed.
+    // SwiftUI's .offset() on macOS DOES update NSView.convert(_:to:nil) correctly
+    // (unlike SwiftUI ScrollView which uses CALayer transforms).
 
     /// Animate the viewport offset to a target value over the configured duration.
     func animateViewportOffset(to target: CGFloat) {
