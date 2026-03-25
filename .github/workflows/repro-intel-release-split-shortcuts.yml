@@ -11,21 +11,31 @@ on:
         description: Release tag to test
         required: false
         default: v0.62.2
+      runner:
+        description: Intel runner to use
+        required: false
+        default: macos-15-intel
+        type: choice
+        options:
+          - macos-15-intel
+          - macos-26-intel
+      shortcut:
+        description: Shortcut to send
+        required: false
+        default: cmd-d
+        type: choice
+        options:
+          - cmd-d
+          - cmd-shift-d
 
 jobs:
   repro:
-    name: ${{ matrix.runner }} ${{ matrix.shortcut }}
-    runs-on: ${{ matrix.runner }}
+    name: ${{ github.event_name == 'pull_request' && 'macos-15-intel cmd-d' || format('{0} {1}', inputs.runner, inputs.shortcut) }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'macos-15-intel' || inputs.runner }}
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        runner:
-          - macos-15-intel
-          - macos-26-intel
-        shortcut:
-          - cmd-d
-          - cmd-shift-d
+    env:
+      REPRO_RUNNER: ${{ github.event_name == 'pull_request' && 'macos-15-intel' || inputs.runner }}
+      REPRO_SHORTCUT: ${{ github.event_name == 'pull_request' && 'cmd-d' || inputs.shortcut }}
 
     steps:
       - name: Checkout
@@ -61,14 +71,14 @@ jobs:
       - name: Reproduce release split failure
         env:
           CMUX_RELEASE_TAG: ${{ inputs.release_tag || 'v0.62.2' }}
-          CMUX_REPRO_SHORTCUT: ${{ matrix.shortcut }}
-          CMUX_REPRO_DIR: ${{ runner.temp }}/cmux-intel-release-repro-${{ matrix.runner }}-${{ matrix.shortcut }}
+          CMUX_REPRO_SHORTCUT: ${{ env.REPRO_SHORTCUT }}
+          CMUX_REPRO_DIR: ${{ runner.temp }}/cmux-intel-release-repro-${{ env.REPRO_RUNNER }}-${{ env.REPRO_SHORTCUT }}
         run: scripts/repro-intel-release-split-shortcuts.sh
 
       - name: Upload repro artifacts
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
-          name: intel-release-repro-${{ matrix.runner }}-${{ matrix.shortcut }}
-          path: ${{ runner.temp }}/cmux-intel-release-repro-${{ matrix.runner }}-${{ matrix.shortcut }}/artifacts
+          name: intel-release-repro-${{ env.REPRO_RUNNER }}-${{ env.REPRO_SHORTCUT }}
+          path: ${{ runner.temp }}/cmux-intel-release-repro-${{ env.REPRO_RUNNER }}-${{ env.REPRO_SHORTCUT }}/artifacts
           if-no-files-found: warn
