@@ -393,12 +393,12 @@ cef_bridge_browser_t cef_bridge_browser_create(
     bb->client->SetOwner(bb);
 
     CefWindowInfo window_info;
-    // Use Chrome runtime (default) to get the full Chrome UI
-    // (address bar, back/forward, context menus). CEF creates
-    // its own window; we'll reparent its content view later.
-    // Don't set parent_view (forces Alloy runtime without Chrome UI).
-    window_info.bounds = {0, 0, width, height};
-    window_info.hidden = true; // Start hidden, shown after reparenting
+    if (parent_view) {
+        window_info.parent_view = parent_view;
+        window_info.bounds = {0, 0, width, height};
+        // Alloy runtime required when parent_view is set on macOS.
+        window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    }
 
     CefBrowserSettings browser_settings;
     // Don't override size - the CefStructBase constructor sets it correctly
@@ -465,26 +465,7 @@ void* cef_bridge_browser_get_nsview(cef_bridge_browser_t browser) {
     auto* bb = static_cast<BridgeBrowser*>(browser);
     CefRefPtr<CefBrowser> b = bb->client->GetBrowser();
     if (!b) return nullptr;
-
-    // GetWindowHandle returns the NSView for the browser content.
-    // For Chrome runtime, we want the full Chrome window's content view
-    // (includes the omnibar, toolbar, etc.)
-    void* view = b->GetHost()->GetWindowHandle();
-    if (!view) return nullptr;
-
-    // Walk up to the window's contentView to get the full Chrome UI
-#ifdef __APPLE__
-    // Use ObjC runtime to find the enclosing NSWindow's contentView
-    id nsview = (id)view;
-    id window = ((id(*)(id, SEL))objc_msgSend)(nsview, sel_getUid("window"));
-    if (window) {
-        id contentView = ((id(*)(id, SEL))objc_msgSend)(window, sel_getUid("contentView"));
-        if (contentView) {
-            return (void*)contentView;
-        }
-    }
-#endif
-    return view;
+    return b->GetHost()->GetWindowHandle();
 }
 
 // -------------------------------------------------------------------

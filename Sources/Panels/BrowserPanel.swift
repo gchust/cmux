@@ -1876,6 +1876,7 @@ final class BrowserPanel: Panel, ObservableObject {
 
     /// The underlying CEF browser view (Chromium engine only, nil for WebKit).
     private(set) var cefBrowserView: CEFBrowserView?
+    private var cefCancellables = Set<AnyCancellable>()
 
     /// Monotonic identity for the current WKWebView instance.
     /// Incremented whenever we replace the underlying WKWebView after a process crash.
@@ -2622,7 +2623,32 @@ final class BrowserPanel: Panel, ObservableObject {
                 // management which we'll add in a later phase.
                 let url = initialURL?.absoluteString ?? "https://www.google.com"
                 cefView.createBrowser(initialURL: url, cachePath: nil)
+                shouldRenderWebView = true
             }
+
+            // Subscribe to CEF URL/title changes to update the panel's state
+            cefView.$currentURL
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] urlStr in
+                    guard let self, !urlStr.isEmpty else { return }
+                    self.currentURL = URL(string: urlStr)
+                }
+                .store(in: &cefCancellables)
+            cefView.$currentTitle
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] title in
+                    guard let self, !title.isEmpty else { return }
+                    self.pageTitle = title
+                }
+                .store(in: &cefCancellables)
+            cefView.$canGoBack
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] val in self?.canGoBack = val }
+                .store(in: &cefCancellables)
+            cefView.$canGoForward
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] val in self?.canGoForward = val }
+                .store(in: &cefCancellables)
         } else {
             self.cefBrowserView = nil
         }
@@ -3641,6 +3667,12 @@ final class BrowserPanel: Panel, ObservableObject {
 
     /// Navigate to a URL
     func navigate(to url: URL, recordTypedNavigation: Bool = false) {
+        // For Chromium panels, navigate via CEF instead of WebKit
+        if engineType == .chromium, let cefView = cefBrowserView {
+            shouldRenderWebView = true
+            cefView.loadURL(url.absoluteString)
+            return
+        }
         let request = URLRequest(url: url)
         if shouldBlockInsecureHTTPNavigation(to: url) {
             presentInsecureHTTPAlert(for: request, intent: .currentTab, recordTypedNavigation: recordTypedNavigation)
@@ -4056,6 +4088,7 @@ extension BrowserPanel {
 
     /// Go back in history
     func goBack() {
+        if engineType == .chromium { cefBrowserView?.goBack(); return }
         guard canGoBack else { return }
         if usesRestoredSessionHistory {
             realignRestoredSessionHistoryToLiveCurrentIfPossible()
@@ -4089,6 +4122,7 @@ extension BrowserPanel {
 
     /// Go forward in history
     func goForward() {
+        if engineType == .chromium { cefBrowserView?.goForward(); return }
         guard canGoForward else { return }
         if usesRestoredSessionHistory {
             realignRestoredSessionHistoryToLiveCurrentIfPossible()
