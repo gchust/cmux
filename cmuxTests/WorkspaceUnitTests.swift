@@ -512,6 +512,105 @@ final class WorkspaceCreationPlacementTests: XCTestCase {
 }
 
 
+final class WorkspaceCreationConfigSanitizationTests: XCTestCase {
+    private final class UnsafeConfigSnapshotTabManager: TabManager {
+        private var retainedCStringPointers: [UnsafeMutablePointer<CChar>] = []
+        private var retainedEnvVars: UnsafeMutablePointer<ghostty_env_var_s>?
+        private var injectedConfig: ghostty_surface_config_s?
+        var capturedConfigTemplate: ghostty_surface_config_s?
+
+        func installInjectedConfig(fontSize: Float) {
+            invalidateInjectedConfig()
+
+            let workingDirectory = strdup("/tmp/cmux-workspace-snapshot")
+            let command = strdup("echo snapshot")
+            let envKey = strdup("CMUX_INHERITED_ENV")
+            let envValue = strdup("1")
+            let envVars = UnsafeMutablePointer<ghostty_env_var_s>.allocate(capacity: 1)
+            envVars.initialize(
+                to: ghostty_env_var_s(
+                    key: UnsafePointer(envKey),
+                    value: UnsafePointer(envValue)
+                )
+            )
+
+            retainedCStringPointers = [workingDirectory, command, envKey, envValue].compactMap { $0 }
+            retainedEnvVars = envVars
+
+            var config = ghostty_surface_config_new()
+            config.font_size = fontSize
+            config.working_directory = UnsafePointer(workingDirectory)
+            config.command = UnsafePointer(command)
+            config.env_vars = envVars
+            config.env_var_count = 1
+            injectedConfig = config
+        }
+
+        override func didCaptureWorkspaceCreationSnapshot() {
+            invalidateInjectedConfig()
+        }
+
+        override func inheritedTerminalConfigForNewWorkspace(
+            workspace: Workspace?
+        ) -> ghostty_surface_config_s? {
+            injectedConfig ?? super.inheritedTerminalConfigForNewWorkspace(workspace: workspace)
+        }
+
+        override func makeWorkspaceForCreation(
+            title: String,
+            workingDirectory: String?,
+            portOrdinal: Int,
+            configTemplate: ghostty_surface_config_s?,
+            initialTerminalCommand: String?,
+            initialTerminalEnvironment: [String: String]
+        ) -> Workspace {
+            capturedConfigTemplate = configTemplate
+            // The assertion is on the captured template; avoid dereferencing any injected
+            // pointer-backed fields here so the test can safely detect unsanitized state.
+            return super.makeWorkspaceForCreation(
+                title: title,
+                workingDirectory: workingDirectory,
+                portOrdinal: portOrdinal,
+                configTemplate: nil,
+                initialTerminalCommand: initialTerminalCommand,
+                initialTerminalEnvironment: initialTerminalEnvironment
+            )
+        }
+
+        private func invalidateInjectedConfig() {
+            injectedConfig = nil
+            if let retainedEnvVars {
+                retainedEnvVars.deinitialize(count: 1)
+                retainedEnvVars.deallocate()
+                self.retainedEnvVars = nil
+            }
+            for pointer in retainedCStringPointers {
+                free(pointer)
+            }
+            retainedCStringPointers.removeAll(keepingCapacity: false)
+        }
+    }
+
+    @MainActor
+    func testAddWorkspacePassesSanitizedInheritedConfigTemplateAfterSourceBuffersAreReleased() {
+        let manager = UnsafeConfigSnapshotTabManager()
+        manager.installInjectedConfig(fontSize: 19)
+        _ = manager.addWorkspace()
+
+        guard let capturedConfig = manager.capturedConfigTemplate else {
+            XCTFail("Expected captured config template for new workspace")
+            return
+        }
+
+        XCTAssertEqual(capturedConfig.font_size, 19, accuracy: 0.001)
+        XCTAssertNil(capturedConfig.working_directory)
+        XCTAssertNil(capturedConfig.command)
+        XCTAssertNil(capturedConfig.env_vars)
+        XCTAssertEqual(capturedConfig.env_var_count, 0)
+    }
+}
+
+
 final class WorkspaceTabColorSettingsTests: XCTestCase {
     func testNormalizedHexAcceptsAndNormalizesValidInput() {
         XCTAssertEqual(WorkspaceTabColorSettings.normalizedHex("#abc123"), "#ABC123")

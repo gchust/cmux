@@ -2251,7 +2251,7 @@ class TabManager: ObservableObject {
         inheritedTerminalConfigForNewWorkspace(workspace: selectedWorkspace)
     }
 
-    private func inheritedTerminalConfigForNewWorkspace(
+    func inheritedTerminalConfigForNewWorkspace(
         workspace: Workspace?
     ) -> ghostty_surface_config_s? {
         if let panel = terminalPanelForWorkspaceConfigInheritanceSource(workspace: workspace),
