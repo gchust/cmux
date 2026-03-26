@@ -459,13 +459,13 @@ final class WorkspaceCreationPlacementTests: XCTestCase {
         let third = manager.addWorkspace()
         manager.selectWorkspace(third)
 
-        guard let closingWorkspace else {
+        guard let capturedClosingWorkspace = closingWorkspace else {
             XCTFail("Expected secondary workspace")
             return
         }
 
-        let closingWorkspaceId = closingWorkspace.id
-        weak var weakClosingWorkspace = closingWorkspace
+        let closingWorkspaceId = capturedClosingWorkspace.id
+        weak var weakClosingWorkspace = capturedClosingWorkspace
         XCTAssertEqual(manager.tabs.map(\.id), [first.id, closingWorkspaceId, third.id])
         closingWorkspace = nil
 
