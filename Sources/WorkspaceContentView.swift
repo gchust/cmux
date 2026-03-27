@@ -381,8 +381,9 @@ struct WorkspaceContentView: View {
                     .ignoresSafeArea(.container, edges: .top)
                     .overlay(alignment: .top) {
                         if isWorkspaceInputActive {
-                            TitlebarDoubleClickMonitorView()
+                            WindowDragHandleView()
                                 .frame(height: WorkspaceTitlebarInteractionMetrics.minimalModeTopStripHeight)
+                                .background(TitlebarDoubleClickMonitorView())
                         }
                     }
             } else {
