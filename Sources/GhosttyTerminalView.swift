@@ -4805,6 +4805,9 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     private func activeSurfaceResizeDeferralReason() -> String? {
+        if inLiveResize || window?.inLiveResize == true {
+            return nil
+        }
         return Self.shouldDeferSurfaceResizeForActiveDrag() ? "tabDrag" : nil
     }
 
