@@ -337,7 +337,7 @@ final class WindowTerminalHostView: NSView {
         return nil
     }
 
-    static func hasSplitDivider(atScreenPoint screenPoint: NSPoint, in window: NSWindow) -> Bool {
+    fileprivate static func hasSplitDivider(atScreenPoint screenPoint: NSPoint, in window: NSWindow) -> Bool {
         guard let rootView = window.contentView else { return false }
         let windowPoint = window.convertPoint(fromScreen: screenPoint)
         return dividerCursorKind(at: windowPoint, in: rootView) != nil
@@ -595,6 +595,7 @@ final class WindowTerminalPortal: NSObject {
     private var hasDeferredFullSyncScheduled = false
     private var hasExternalGeometrySyncScheduled = false
     private var hasPendingExternalGeometrySyncFollowUp = false
+    private var pendingExternalGeometrySyncRequiresImmediate = false
     private var geometryObservers: [NSObjectProtocol] = []
 #if DEBUG
     private var lastLoggedBonsplitContainerSignature: String?
@@ -688,29 +689,41 @@ final class WindowTerminalPortal: NSObject {
     }
 
     fileprivate func scheduleExternalGeometrySynchronize() {
+        scheduleExternalGeometrySynchronize(
+            forceImmediate: TerminalWindowPortalRegistry.isInteractiveGeometryResizeActive
+        )
+    }
+
+    fileprivate func scheduleExternalGeometrySynchronize(forceImmediate: Bool) {
         guard !hasExternalGeometrySyncScheduled else {
             hasPendingExternalGeometrySyncFollowUp = true
+            pendingExternalGeometrySyncRequiresImmediate =
+                pendingExternalGeometrySyncRequiresImmediate || forceImmediate
 #if DEBUG
             dlog(
                 "portal.externalGeometrySync.coalesce host=\(portalDebugToken(hostView)) " +
+                "immediate=\(forceImmediate ? 1 : 0) " +
                 "frame=\(portalDebugFrame(hostView.frame))"
             )
 #endif
             return
         }
         hasExternalGeometrySyncScheduled = true
-        let isDragEvent = TerminalWindowPortalRegistry.isInteractiveGeometryResizeActive
-        let requiresSettledLayout = !(hostView.inLiveResize || window?.inLiveResize == true || isDragEvent)
+        let requiresSettledLayout = !(hostView.inLiveResize || window?.inLiveResize == true || forceImmediate)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let performSync = {
                 self.hasExternalGeometrySyncScheduled = false
                 self.synchronizeAllEntriesFromExternalGeometryChange()
                 if self.hasPendingExternalGeometrySyncFollowUp {
+                    let followUpImmediate = self.pendingExternalGeometrySyncRequiresImmediate
                     self.hasPendingExternalGeometrySyncFollowUp = false
+                    self.pendingExternalGeometrySyncRequiresImmediate = false
                     if !self.hasExternalGeometrySyncScheduled {
-                        self.scheduleExternalGeometrySynchronize()
+                        self.scheduleExternalGeometrySynchronize(forceImmediate: followUpImmediate)
                     }
+                } else {
+                    self.pendingExternalGeometrySyncRequiresImmediate = false
                 }
             }
             if requiresSettledLayout {
@@ -1704,6 +1717,7 @@ enum TerminalWindowPortalRegistry {
     private static var hostedToWindowId: [ObjectIdentifier: ObjectIdentifier] = [:]
     private static var hasPendingExternalGeometrySyncForAllWindows = false
     private static var interactiveGeometryResizeCount = 0
+    private static var activeSplitDividerDragWindowId: ObjectIdentifier?
 #if DEBUG
     private static var blockedBindCount: Int = 0
     private static var blockedBindReasons: [String: Int] = [:]
@@ -1721,16 +1735,45 @@ enum TerminalWindowPortalRegistry {
         // Bonsplit divider drags do not participate in the explicit resize counter used by
         // sidebar drags, but they should still get immediate portal geometry synchronization.
         guard let event = NSApp.currentEvent else { return false }
+        let isLeftButtonDown = (NSEvent.pressedMouseButtons & 1) != 0
+        guard isLeftButtonDown else {
+            activeSplitDividerDragWindowId = nil
+            return false
+        }
+
         switch event.type {
-        case .leftMouseDragged:
+        case .leftMouseUp:
+            activeSplitDividerDragWindowId = nil
+            return false
+        default:
+            break
+        }
+
+        let candidateWindows = currentSplitDividerDragCandidateWindows(for: event)
+        if let activeSplitDividerDragWindowId,
+           candidateWindows.contains(where: { ObjectIdentifier($0) == activeSplitDividerDragWindowId }) {
+            return true
+        }
+
+        switch event.type {
+        case .leftMouseDown, .leftMouseDragged:
             break
         default:
             return false
         }
 
-        guard (NSEvent.pressedMouseButtons & 1) != 0 else { return false }
-
         let mouseLocation = NSEvent.mouseLocation
+        for window in candidateWindows {
+            if WindowTerminalHostView.hasSplitDivider(atScreenPoint: mouseLocation, in: window) {
+                activeSplitDividerDragWindowId = ObjectIdentifier(window)
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private static func currentSplitDividerDragCandidateWindows(for event: NSEvent) -> [NSWindow] {
         var candidateWindows: [NSWindow] = []
         if let eventWindow = event.window {
             candidateWindows.append(eventWindow)
@@ -1741,14 +1784,7 @@ enum TerminalWindowPortalRegistry {
         if let mainWindow = NSApp.mainWindow, !candidateWindows.contains(where: { $0 === mainWindow }) {
             candidateWindows.append(mainWindow)
         }
-
-        for window in candidateWindows {
-            if WindowTerminalHostView.hasSplitDivider(atScreenPoint: mouseLocation, in: window) {
-                return true
-            }
-        }
-
-        return false
+        return candidateWindows
     }
 
     private static func bindBlockReason(

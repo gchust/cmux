@@ -2264,8 +2264,6 @@ struct ContentView: View {
 #endif
                     if let observedWindow {
                         TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronize(for: observedWindow)
-                    } else {
-                        TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronizeForAllWindows()
                     }
                 }
                 sidebarDragStartWidth = nil
@@ -2303,8 +2301,6 @@ struct ContentView: View {
 #endif
                             if let observedWindow {
                                 TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronize(for: observedWindow)
-                            } else {
-                                TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronizeForAllWindows()
                             }
                             sidebarDragStartWidth = nil
                         }
