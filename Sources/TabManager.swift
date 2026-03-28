@@ -1208,110 +1208,106 @@ class TabManager: ObservableObject {
         placementOverride: NewWorkspacePlacement? = nil,
         autoWelcomeIfNeeded: Bool = true
     ) -> Workspace {
-        // Pin the selected workspace for the entire pre-extraction phase.
-        // Reading selectedWorkspace multiple times (via helper methods) creates separate
-        // temporary references. With aggressive ARC + whole-module inlining (Xcode 16+),
-        // these can be released before inlined callees finish reading @Published properties
-        // (panels, currentDirectory, panelDirectories) on the workspace, causing a
-        // use-after-free crash in PublishedSubject.value.getter / _platform_memmove.
-        // Extracting once and pinning with withExtendedLifetime prevents this.
         let sourceWorkspace = selectedWorkspace
-        let (preferredDir, inheritedFontPoints): (String?, Float?) = withExtendedLifetime(sourceWorkspace) {
+        let capturedTabs = tabs
+        // Snapshot the selected tab from the pinned workspace instead of rereading the
+        // @Published selectedTabId storage after the inheritance helpers. The arm64 Nightly
+        // Cmd+N crash is in PublishedSubject.value.getter on that second getter read.
+        let capturedSelectedTabId = sourceWorkspace?.id
+        // Keep both the source workspace and the pre-creation workspace array alive for the
+        // entire creation path. Release ARC can otherwise drop retains early across the
+        // helper/insertion chain, which reintroduces use-after-free crashes in optimized builds.
+        return withExtendedLifetime((capturedTabs, sourceWorkspace)) {
             let dir = preferredWorkingDirectoryForNewTab(workspace: sourceWorkspace)
             let font = inheritedTerminalFontPointsForNewWorkspace(workspace: sourceWorkspace)
-            return (dir, font)
-        }
-
-        let capturedTabs = tabs
-        let capturedSelectedTabId = selectedTabId
-
-        let snapshot = workspaceCreationSnapshotLite(
-            currentTabs: capturedTabs,
-            currentSelectedTabId: capturedSelectedTabId,
-            preferredWorkingDirectory: preferredDir,
-            inheritedTerminalFontPoints: inheritedFontPoints
-        )
-        didCaptureWorkspaceCreationSnapshot()
-#if DEBUG
-        maybeMutateSelectionDuringWorkspaceCreationForDev(snapshot: snapshot)
-#endif
-        let nextTabCount = snapshot.tabs.count + 1
-        sentryBreadcrumb("workspace.create", data: ["tabCount": nextTabCount])
-        let explicitWorkingDirectory = normalizedWorkingDirectory(overrideWorkingDirectory)
-        let workingDirectory = explicitWorkingDirectory ?? snapshot.preferredWorkingDirectory
-        let inheritedConfig = workspaceCreationConfigTemplate(
-            inheritedTerminalFontPoints: snapshot.inheritedTerminalFontPoints
-        )
-        // Resolve placement against the pre-creation snapshot before Workspace init
-        // boots terminal state. The ssh/new-workspace path can otherwise crash while
-        // reading @Published placement state from existing workspaces mid-creation.
-        let insertIndex = newTabInsertIndex(snapshot: snapshot, placementOverride: placementOverride)
-        let ordinal = Self.nextPortOrdinal
-        Self.nextPortOrdinal += 1
-        let newWorkspace = makeWorkspaceForCreation(
-            title: title ?? "Terminal \(nextTabCount)",
-            workingDirectory: workingDirectory,
-            portOrdinal: ordinal,
-            configTemplate: inheritedConfig,
-            initialTerminalCommand: initialTerminalCommand,
-            initialTerminalEnvironment: initialTerminalEnvironment
-        )
-        newWorkspace.owningTabManager = self
-        if title != nil {
-            newWorkspace.setCustomTitle(title)
-        }
-        wireClosedBrowserTracking(for: newWorkspace)
-        if eagerLoadTerminal && !select {
-            requestBackgroundWorkspaceLoad(for: newWorkspace.id)
-        }
-        // Apply insertion to the current live array so post-snapshot closes/reorders
-        // are preserved instead of reintroducing stale workspace instances.
-        var updatedTabs = tabs
-        if insertIndex >= 0 && insertIndex <= updatedTabs.count {
-            updatedTabs.insert(newWorkspace, at: insertIndex)
-        } else {
-            updatedTabs.append(newWorkspace)
-        }
-        tabs = updatedTabs
-        if let explicitWorkingDirectory,
-           let terminalPanel = newWorkspace.focusedTerminalPanel {
-            scheduleInitialWorkspaceGitMetadataRefresh(
-                workspaceId: newWorkspace.id,
-                panelId: terminalPanel.id,
-                directory: explicitWorkingDirectory
+            let snapshot = workspaceCreationSnapshotLite(
+                currentTabs: capturedTabs,
+                currentSelectedTabId: capturedSelectedTabId,
+                preferredWorkingDirectory: dir,
+                inheritedTerminalFontPoints: font
             )
-        }
-        if eagerLoadTerminal {
-            if select {
-                newWorkspace.focusedTerminalPanel?.surface.requestBackgroundSurfaceStartIfNeeded()
+            didCaptureWorkspaceCreationSnapshot()
+#if DEBUG
+            maybeMutateSelectionDuringWorkspaceCreationForDev(snapshot: snapshot)
+#endif
+            let nextTabCount = snapshot.tabs.count + 1
+            sentryBreadcrumb("workspace.create", data: ["tabCount": nextTabCount])
+            let explicitWorkingDirectory = normalizedWorkingDirectory(overrideWorkingDirectory)
+            let workingDirectory = explicitWorkingDirectory ?? snapshot.preferredWorkingDirectory
+            let inheritedConfig = workspaceCreationConfigTemplate(
+                inheritedTerminalFontPoints: snapshot.inheritedTerminalFontPoints
+            )
+            // Resolve placement against the pre-creation snapshot before Workspace init
+            // boots terminal state. The ssh/new-workspace path can otherwise crash while
+            // reading @Published placement state from existing workspaces mid-creation.
+            let insertIndex = newTabInsertIndex(snapshot: snapshot, placementOverride: placementOverride)
+            let ordinal = Self.nextPortOrdinal
+            Self.nextPortOrdinal += 1
+            let newWorkspace = makeWorkspaceForCreation(
+                title: title ?? "Terminal \(nextTabCount)",
+                workingDirectory: workingDirectory,
+                portOrdinal: ordinal,
+                configTemplate: inheritedConfig,
+                initialTerminalCommand: initialTerminalCommand,
+                initialTerminalEnvironment: initialTerminalEnvironment
+            )
+            newWorkspace.owningTabManager = self
+            if title != nil {
+                newWorkspace.setCustomTitle(title)
             }
-        }
-        if select {
-#if DEBUG
-            debugPrimeWorkspaceSwitchTrigger("create", to: newWorkspace.id)
-#endif
-            selectedTabId = newWorkspace.id
-            NotificationCenter.default.post(
-                name: .ghosttyDidFocusTab,
-                object: nil,
-                userInfo: [GhosttyNotificationKey.tabId: newWorkspace.id]
-            )
-        }
-#if DEBUG
-        UITestRecorder.incrementInt("addTabInvocations")
-        UITestRecorder.record([
-            "tabCount": String(updatedTabs.count),
-            "selectedTabId": select ? newWorkspace.id.uuidString : (snapshot.selectedTabId?.uuidString ?? "")
-        ])
-#endif
-        if autoWelcomeIfNeeded && select && !UserDefaults.standard.bool(forKey: WelcomeSettings.shownKey) {
-            if let appDelegate = AppDelegate.shared {
-                appDelegate.sendWelcomeCommandWhenReady(to: newWorkspace, markShownOnSend: true)
+            wireClosedBrowserTracking(for: newWorkspace)
+            if eagerLoadTerminal && !select {
+                requestBackgroundWorkspaceLoad(for: newWorkspace.id)
+            }
+            // Apply insertion to the current live array so post-snapshot closes/reorders
+            // are preserved instead of reintroducing stale workspace instances.
+            var updatedTabs = tabs
+            if insertIndex >= 0 && insertIndex <= updatedTabs.count {
+                updatedTabs.insert(newWorkspace, at: insertIndex)
             } else {
-                sendWelcomeWhenReady(to: newWorkspace)
+                updatedTabs.append(newWorkspace)
             }
+            tabs = updatedTabs
+            if let explicitWorkingDirectory,
+               let terminalPanel = newWorkspace.focusedTerminalPanel {
+                scheduleInitialWorkspaceGitMetadataRefresh(
+                    workspaceId: newWorkspace.id,
+                    panelId: terminalPanel.id,
+                    directory: explicitWorkingDirectory
+                )
+            }
+            if eagerLoadTerminal {
+                if select {
+                    newWorkspace.focusedTerminalPanel?.surface.requestBackgroundSurfaceStartIfNeeded()
+                }
+            }
+            if select {
+#if DEBUG
+                debugPrimeWorkspaceSwitchTrigger("create", to: newWorkspace.id)
+#endif
+                selectedTabId = newWorkspace.id
+                NotificationCenter.default.post(
+                    name: .ghosttyDidFocusTab,
+                    object: nil,
+                    userInfo: [GhosttyNotificationKey.tabId: newWorkspace.id]
+                )
+            }
+#if DEBUG
+            UITestRecorder.incrementInt("addTabInvocations")
+            UITestRecorder.record([
+                "tabCount": String(updatedTabs.count),
+                "selectedTabId": select ? newWorkspace.id.uuidString : (snapshot.selectedTabId?.uuidString ?? "")
+            ])
+#endif
+            if autoWelcomeIfNeeded && select && !UserDefaults.standard.bool(forKey: WelcomeSettings.shownKey) {
+                if let appDelegate = AppDelegate.shared {
+                    appDelegate.sendWelcomeCommandWhenReady(to: newWorkspace, markShownOnSend: true)
+                } else {
+                    sendWelcomeWhenReady(to: newWorkspace)
+                }
+            }
+            return newWorkspace
         }
-        return newWorkspace
     }
 
     @MainActor
@@ -2211,7 +2207,17 @@ class TabManager: ObservableObject {
         preferredWorkingDirectory: String?,
         inheritedTerminalFontPoints: Float?
     ) -> WorkspaceCreationSnapshot {
-        let tabSnapshots = currentTabs.map { WorkspaceCreationTabSnapshot(workspace: $0) }
+        var tabSnapshots: [WorkspaceCreationTabSnapshot] = []
+        tabSnapshots.reserveCapacity(currentTabs.count)
+        for workspace in currentTabs {
+            // Keep each Workspace alive while copying the tiny value snapshot out of it.
+            // The optimized arm64 Nightly build can otherwise over-release during
+            // Collection.map, crashing here in swift_release / snapshot creation.
+            let snapshot = withExtendedLifetime(workspace) {
+                WorkspaceCreationTabSnapshot(workspace: workspace)
+            }
+            tabSnapshots.append(snapshot)
+        }
         let selectedTabSnapshot = currentSelectedTabId.flatMap { selectedTabId in
             tabSnapshots.first(where: { $0.id == selectedTabId })
         }
@@ -2290,34 +2296,32 @@ class TabManager: ObservableObject {
         inheritedTerminalConfigForNewWorkspace(workspace: selectedWorkspace)
     }
 
+    private func cachedInheritedTerminalFontPointsForNewWorkspace(
+        workspace: Workspace?
+    ) -> Float? {
+        guard let workspace else { return nil }
+        // New workspace creation only seeds font size into a fresh Swift-owned template.
+        // Avoid reading live panel/surface state here; the arm64 Nightly Cmd+N crash path
+        // was repeatedly dereferencing pointer-backed terminal objects while preparing the
+        // new workspace. The workspace already caches the rooted font lineage we need.
+        return withExtendedLifetime(workspace) {
+            guard let fontPoints = workspace.lastRememberedTerminalFontPointsForConfigInheritance(),
+                  fontPoints > 0 else {
+                return nil
+            }
+            return fontPoints
+        }
+    }
+
     func inheritedTerminalConfigForNewWorkspace(
         workspace: Workspace?
     ) -> CmuxSurfaceConfigTemplate? {
-        guard let workspace else { return nil }
-        // Pin the workspace for the duration. The panel and its TerminalSurface
-        // wrapper must also stay alive while we hold the raw ghostty_surface_t
-        // pointer extracted from panel.surface.surface, since that C pointer is
-        // owned by the TerminalSurface and freed when it deallocates.
-        return withExtendedLifetime(workspace) {
-            if let panel = terminalPanelForWorkspaceConfigInheritanceSource(workspace: workspace) {
-                let surface = panel.surface
-                if let sourceSurface = surface.surface {
-                    let config = cmuxInheritedSurfaceConfig(
-                        sourceSurface: sourceSurface,
-                        context: GHOSTTY_SURFACE_CONTEXT_TAB
-                    )
-                    // Prevent ARC from releasing panel/surface before the C call above completes.
-                    withExtendedLifetime((panel, surface)) {}
-                    return config
-                }
-            }
-            if let fallbackFontPoints = workspace.lastRememberedTerminalFontPointsForConfigInheritance() {
-                var config = CmuxSurfaceConfigTemplate()
-                config.fontSize = fallbackFontPoints
-                return config
-            }
-            return nil as CmuxSurfaceConfigTemplate?
+        guard let fontPoints = cachedInheritedTerminalFontPointsForNewWorkspace(workspace: workspace) else {
+            return nil
         }
+        var config = CmuxSurfaceConfigTemplate()
+        config.fontSize = fontPoints
+        return config
     }
 
     private func inheritedTerminalFontPointsForNewWorkspace() -> Float? {
@@ -2327,11 +2331,7 @@ class TabManager: ObservableObject {
     private func inheritedTerminalFontPointsForNewWorkspace(
         workspace: Workspace?
     ) -> Float? {
-        guard let inheritedConfig = inheritedTerminalConfigForNewWorkspace(workspace: workspace),
-              inheritedConfig.fontSize > 0 else {
-            return nil
-        }
-        return inheritedConfig.fontSize
+        cachedInheritedTerminalFontPointsForNewWorkspace(workspace: workspace)
     }
 
     private func workspaceCreationConfigTemplate(
