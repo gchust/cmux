@@ -479,8 +479,9 @@ final class NiriCanvasView: NSView {
 
     private var dragLayer: CALayer?
     private var currentDropTarget: DropTarget?
-    // (auto-scroll vars removed — using linear scroll now)
-    var suppressHitTestFocus = false  // true during drag to prevent hitTest from stealing focus
+    private var isDragging = false
+    private var dragMousePt: NSPoint = .zero  // current mouse position during drag
+    var suppressHitTestFocus = false
 
     enum DropEdge: Equatable { case left, right, top, bottom }
 
@@ -528,14 +529,16 @@ final class NiriCanvasView: NSView {
 
         let mousePt = convert(event.locationInWindow, from: nil)
         dl.position = CGPoint(x: mousePt.x, y: mousePt.y)
-        // (linear scroll resets each frame, no debounce needed)
+        isDragging = true
+        dragMousePt = mousePt
         suppressHitTestFocus = true
 
         // Tracking loop: mouse events + keyboard (Escape to cancel)
         var cancelled = false
         while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown]) {
-            if next.type == .keyDown && next.keyCode == 53 { cancelled = true; break }  // Escape
+            if next.type == .keyDown && next.keyCode == 53 { cancelled = true; break }
             let pt = convert(next.locationInWindow, from: nil)
+            dragMousePt = pt  // update for tick() to use
 
             if next.type == .leftMouseUp {
                 if !cancelled {
@@ -548,21 +551,6 @@ final class NiriCanvasView: NSView {
             CATransaction.begin(); CATransaction.setDisableActions(true)
             dl.position = CGPoint(x: pt.x, y: pt.y)
             CATransaction.commit()
-
-            // Linear scroll when dragging near edges of the canvas.
-            // Speed increases as cursor gets closer to the edge.
-            let scrollZone: CGFloat = 80
-            if pt.x < scrollZone {
-                let speed = (scrollZone - pt.x) / scrollZone * 12  // 0-12 px per frame
-                targetOffset = max(0, targetOffset - speed)
-                scrollOffset = max(0, scrollOffset - speed)
-                layoutStrip()
-            } else if pt.x > bounds.width - scrollZone {
-                let speed = (pt.x - (bounds.width - scrollZone)) / scrollZone * 12
-                targetOffset += speed
-                scrollOffset += speed
-                layoutStrip()
-            }
 
             // Update drop target
             updateDropTarget(at: pt, srcPi: srcPi, srcTab: tabIndex, srcTabCount: srcTabCount)
@@ -800,6 +788,7 @@ final class NiriCanvasView: NSView {
     }
 
     private func cleanupDrag() {
+        isDragging = false
         dragLayer?.removeFromSuperlayer()
         dragLayer = nil
         dropZoneLayer?.removeFromSuperlayer()
@@ -1352,7 +1341,23 @@ final class NiriCanvasView: NSView {
 
     private func tick() {
         guard !panels.isEmpty, bounds.width > 1 else { return }
-        // Detect window resize (replaces override func layout())
+
+        // Linear scroll during drag (runs every frame, even when mouse is stationary)
+        if isDragging {
+            let scrollZone: CGFloat = 80
+            let pt = dragMousePt
+            if pt.x < scrollZone && pt.x >= 0 {
+                let speed = (scrollZone - pt.x) / scrollZone * 8
+                targetOffset = max(0, targetOffset - speed)
+                scrollOffset = max(0, scrollOffset - speed)
+            } else if pt.x > bounds.width - scrollZone && pt.x <= bounds.width {
+                let speed = (pt.x - (bounds.width - scrollZone)) / scrollZone * 8
+                targetOffset += speed
+                scrollOffset += speed
+            }
+        }
+
+        // Detect window resize
         let currentWidth = bounds.width
         if currentWidth != lastBoundsWidth && currentWidth > 0 {
             lastBoundsWidth = currentWidth
