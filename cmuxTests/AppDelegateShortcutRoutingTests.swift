@@ -33,6 +33,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
     override func tearDown() {
         AppDelegate.shared?.shortcutLayoutCharacterProvider = KeyboardLayout.character(forKeyCode:modifierFlags:)
         AppDelegate.shared?.debugCloseMainWindowConfirmationHandler = nil
+        AppDelegate.shared?.debugCreateMainWindowSourceIsNativeFullScreenOverride = nil
         AppDelegate.shared?.dismissNotificationsPopoverIfShown()
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         for action in KeyboardShortcutSettings.Action.allCases {
@@ -126,17 +127,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             return
         }
 
-        let sourceWindowId = appDelegate.createMainWindow()
-        defer {
-            closeWindow(withId: sourceWindowId)
-        }
-
-        guard let sourceWindow = window(withId: sourceWindowId) else {
-            XCTFail("Expected fullscreen source window")
-            return
-        }
-
-        sourceWindow.styleMask.insert(.fullScreen)
+        appDelegate.debugCreateMainWindowSourceIsNativeFullScreenOverride = true
 
         let newWindowId = appDelegate.createMainWindow()
         defer {
@@ -153,6 +144,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             "New windows should temporarily opt out of fullscreen tiling while opening from a fullscreen source"
         )
 
+        appDelegate.debugCreateMainWindowSourceIsNativeFullScreenOverride = nil
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
 
         XCTAssertFalse(

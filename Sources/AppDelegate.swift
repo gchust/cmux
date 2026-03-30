@@ -2147,6 +2147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let isFirstResponder: Bool
     }
     var debugCloseMainWindowConfirmationHandler: ((NSWindow) -> Bool)?
+    var debugCreateMainWindowSourceIsNativeFullScreenOverride: Bool?
     // Keep debug-only windows alive when tests intentionally inject key mismatches.
     private var debugDetachedContextWindows: [NSWindow] = []
 
@@ -5980,8 +5981,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         let sourceWindow = sourceContext.flatMap { resolvedWindow(for: $0) }
         let existingFrame = sourceWindow?.frame
+        let sourceWindowIsNativeFullScreen: Bool = {
+#if DEBUG
+            if let debugCreateMainWindowSourceIsNativeFullScreenOverride {
+                return debugCreateMainWindowSourceIsNativeFullScreenOverride
+            }
+#endif
+            return sourceWindow?.styleMask.contains(.fullScreen) == true
+        }()
         let shouldTemporarilyDisallowFullScreenTiling =
-            sessionWindowSnapshot == nil && (sourceWindow?.styleMask.contains(.fullScreen) == true)
+            sessionWindowSnapshot == nil && sourceWindowIsNativeFullScreen
         let initialRect: NSRect
         if sessionWindowSnapshot == nil, let existingFrame {
             // Convert frame rect to content rect so the new window matches the
