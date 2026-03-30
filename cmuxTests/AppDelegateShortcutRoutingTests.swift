@@ -98,7 +98,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
         XCTAssertEqual(secondManager.tabs.count, secondCount + 1, "Cmd+N should add workspace to the event's window")
     }
 
-    func testCreateMainWindowDisallowsFullScreenTiling() {
+    func testCreateMainWindowDoesNotDisallowFullScreenTilingByDefault() {
         guard let appDelegate = AppDelegate.shared else {
             XCTFail("Expected AppDelegate.shared")
             return
@@ -114,9 +114,50 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             return
         }
 
-        XCTAssertTrue(
+        XCTAssertFalse(
             window.collectionBehavior.contains(.fullScreenDisallowsTiling),
-            "Main windows should opt out of fullscreen tiling so new windows do not join an existing fullscreen Space"
+            "Main windows should still support standard macOS Split View when not created from a fullscreen source"
+        )
+    }
+
+    func testCreateMainWindowTemporarilyDisallowsFullScreenTilingFromFullscreenSource() {
+        guard let appDelegate = AppDelegate.shared else {
+            XCTFail("Expected AppDelegate.shared")
+            return
+        }
+
+        let sourceWindowId = appDelegate.createMainWindow()
+        defer {
+            closeWindow(withId: sourceWindowId)
+        }
+
+        guard let sourceWindow = window(withId: sourceWindowId) else {
+            XCTFail("Expected fullscreen source window")
+            return
+        }
+
+        sourceWindow.styleMask.insert(.fullScreen)
+
+        let newWindowId = appDelegate.createMainWindow()
+        defer {
+            closeWindow(withId: newWindowId)
+        }
+
+        guard let newWindow = window(withId: newWindowId) else {
+            XCTFail("Expected new window")
+            return
+        }
+
+        XCTAssertTrue(
+            newWindow.collectionBehavior.contains(.fullScreenDisallowsTiling),
+            "New windows should temporarily opt out of fullscreen tiling while opening from a fullscreen source"
+        )
+
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        XCTAssertFalse(
+            newWindow.collectionBehavior.contains(.fullScreenDisallowsTiling),
+            "The fullscreen tiling opt-out should be cleared after initial presentation so Split View keeps working"
         )
     }
 
