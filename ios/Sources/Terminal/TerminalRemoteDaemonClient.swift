@@ -122,6 +122,8 @@ enum TerminalRemoteDaemonClientError: LocalizedError, Equatable {
     case invalidJSON(String)
     case missingResult
     case rpc(code: String, message: String)
+    case responseMismatch
+    case rpcTimeout
 
     var errorDescription: String? {
         switch self {
@@ -131,6 +133,10 @@ enum TerminalRemoteDaemonClientError: LocalizedError, Equatable {
             return "Daemon response was missing a result payload."
         case .rpc(let code, let message):
             return "Daemon RPC failed (\(code)): \(message)"
+        case .responseMismatch:
+            return "Response ID did not match request ID."
+        case .rpcTimeout:
+            return "RPC call timed out waiting for a response."
         }
     }
 }
@@ -138,10 +144,12 @@ enum TerminalRemoteDaemonClientError: LocalizedError, Equatable {
 actor TerminalRemoteDaemonClient {
     private let transport: any TerminalRemoteDaemonTransport
     private let decoder: JSONDecoder
+    private let rpcTimeoutSeconds: TimeInterval
     private var nextRequestID = 1
 
-    init(transport: any TerminalRemoteDaemonTransport) {
+    init(transport: any TerminalRemoteDaemonTransport, rpcTimeoutSeconds: TimeInterval = 30) {
         self.transport = transport
+        self.rpcTimeoutSeconds = rpcTimeoutSeconds
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         self.decoder = decoder
@@ -276,8 +284,21 @@ actor TerminalRemoteDaemonClient {
         nextRequestID += 1
 
         try await transport.writeLine(try encodeRequestLine(id: requestID, method: method, params: params))
-        let responseLine = try await transport.readLine()
-        return try Self.decodeResponse(from: responseLine, decoder: decoder, as: responseType)
+
+        let responseLine: String = try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask { [transport] in
+                try await transport.readLine()
+            }
+            group.addTask { [rpcTimeoutSeconds] in
+                try await Task.sleep(nanoseconds: UInt64(rpcTimeoutSeconds * 1_000_000_000))
+                throw TerminalRemoteDaemonClientError.rpcTimeout
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+
+        return try Self.decodeResponse(from: responseLine, decoder: decoder, expectedID: requestID, as: responseType)
     }
 
     private func encodeRequestLine(id: Int, method: String, params: [String: Any]) throws -> String {
@@ -293,6 +314,7 @@ actor TerminalRemoteDaemonClient {
     private static func decodeResponse<ResponsePayload: Decodable>(
         from line: String,
         decoder: JSONDecoder,
+        expectedID: Int? = nil,
         as responseType: ResponsePayload.Type
     ) throws -> ResponsePayload {
         guard let data = line.data(using: .utf8) else {
@@ -306,6 +328,10 @@ actor TerminalRemoteDaemonClient {
             throw TerminalRemoteDaemonClientError.invalidJSON(line)
         }
 
+        if let expectedID, envelope.id != expectedID {
+            throw TerminalRemoteDaemonClientError.responseMismatch
+        }
+
         if envelope.ok {
             guard let result = envelope.result else {
                 throw TerminalRemoteDaemonClientError.missingResult
@@ -317,13 +343,14 @@ actor TerminalRemoteDaemonClient {
             throw TerminalRemoteDaemonClientError.rpc(code: error.code, message: error.message)
         }
 
-        throw TerminalRemoteDaemonClientError.missingResult
+        throw TerminalRemoteDaemonClientError.rpc(code: "unknown", message: "Server returned an error without details")
     }
 }
 
 extension TerminalRemoteDaemonClient: TerminalRemoteDaemonSessionClient {}
 
 private struct TerminalRemoteDaemonResponseEnvelope<Result: Decodable>: Decodable {
+    let id: Int
     let ok: Bool
     let result: Result?
     let error: TerminalRemoteDaemonRPCErrorPayload?

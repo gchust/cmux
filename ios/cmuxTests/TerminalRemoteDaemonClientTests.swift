@@ -78,6 +78,50 @@ final class TerminalRemoteDaemonClientTests: XCTestCase {
         XCTAssertEqual(result.offset, 0)
     }
 
+    func testResponseIDMismatchThrows() async throws {
+        let transport = InMemoryDaemonTransport(
+            responses: [
+                #"{"id":999,"ok":true,"result":{"session_id":"sess-9","attachments":[],"effective_cols":0,"effective_rows":0,"last_known_cols":0,"last_known_rows":0}}"#
+            ]
+        )
+        let client = TerminalRemoteDaemonClient(transport: transport)
+
+        do {
+            _ = try await client.ensureSession(sessionID: "sess-9")
+            XCTFail("Expected responseMismatch error")
+        } catch let error as TerminalRemoteDaemonClientError {
+            XCTAssertEqual(error, .responseMismatch)
+        }
+    }
+
+    func testErrorWithoutPayloadReturnsUnknownRPC() async throws {
+        let transport = InMemoryDaemonTransport(
+            responses: [
+                #"{"id":1,"ok":false}"#
+            ]
+        )
+        let client = TerminalRemoteDaemonClient(transport: transport)
+
+        do {
+            _ = try await client.ensureSession(sessionID: nil)
+            XCTFail("Expected rpc error")
+        } catch let error as TerminalRemoteDaemonClientError {
+            XCTAssertEqual(error, .rpc(code: "unknown", message: "Server returned an error without details"))
+        }
+    }
+
+    func testRPCTimeoutThrows() async throws {
+        let transport = HangingDaemonTransport()
+        let client = TerminalRemoteDaemonClient(transport: transport, rpcTimeoutSeconds: 0.1)
+
+        do {
+            _ = try await client.sendHello()
+            XCTFail("Expected rpcTimeout error")
+        } catch let error as TerminalRemoteDaemonClientError {
+            XCTAssertEqual(error, .rpcTimeout)
+        }
+    }
+
     func testTerminalReadAndWriteUseBase64Payloads() async throws {
         let transport = InMemoryDaemonTransport(
             responses: [
@@ -137,4 +181,14 @@ private actor InMemoryDaemonTransport: TerminalRemoteDaemonTransport {
 
 private enum TestTransportError: Error {
     case noResponseQueued
+}
+
+private actor HangingDaemonTransport: TerminalRemoteDaemonTransport {
+    func writeLine(_ line: String) async throws {}
+
+    func readLine() async throws -> String {
+        // Sleep long enough that the RPC timeout fires first.
+        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+        return ""
+    }
 }
