@@ -56,6 +56,26 @@ final class GhosttyRuntime {
         Self.loadConfig(config)
         ghostty_config_finalize(config)
 
+        #if DEBUG
+        let diagCount = Int(ghostty_config_diagnostics_count(config))
+        NSLog("📱 GhosttyRuntime: config loaded, %d diagnostics", diagCount)
+        for i in 0..<diagCount {
+            let diag = ghostty_config_get_diagnostic(config, UInt32(i))
+            if let msg = diag.message {
+                NSLog("📱 GhosttyRuntime: diag[%d] = %@", i, String(cString: msg))
+            }
+        }
+
+        // Read back background color to verify config was applied
+        var bgColor = ghostty_config_color_s()
+        let hasBg = ghostty_config_get(config, &bgColor, "background", UInt(MemoryLayout<ghostty_config_color_s>.size))
+        NSLog("📱 GhosttyRuntime: background config get=%d r=%d g=%d b=%d", hasBg ? 1 : 0, bgColor.r, bgColor.g, bgColor.b)
+
+        var fontSize: Float64 = 0
+        let hasFont = ghostty_config_get(config, &fontSize, "font-size", UInt(MemoryLayout<Float64>.size))
+        NSLog("📱 GhosttyRuntime: font-size config get=%d value=%f", hasFont ? 1 : 0, fontSize)
+        #endif
+
         var runtimeConfig = ghostty_runtime_config_s(
             userdata: Unmanaged.passUnretained(self).toOpaque(),
             supports_selection_clipboard: false,
@@ -121,15 +141,59 @@ final class GhosttyRuntime {
     private static func loadConfig(_ config: ghostty_config_t?) {
         guard let config else { return }
         #if os(iOS)
-        ensureDefaultiOSConfig()
-        for url in iOSConfigURLs() {
-            url.path.withCString { path in
-                ghostty_config_load_file(config, path)
-            }
-        }
+        Self.setupiOSConfigEnvironment()
+        Self.ensureDefaultiOSConfig()
+        ghostty_config_load_default_files(config)
+        Self.applyiOSDefaults(config)
         #else
         ghostty_config_load_default_files(config)
         #endif
+    }
+
+    private static func setupiOSConfigEnvironment() {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        setenv("XDG_CONFIG_HOME", appSupport.path, 0) // Don't override if already set
+        NSLog("📱 XDG_CONFIG_HOME=%@", String(cString: getenv("XDG_CONFIG_HOME") ?? strdup("nil")))
+    }
+
+    private static func applyiOSDefaults(_ config: ghostty_config_t) {
+        let monokai = """
+        font-size = 14
+        cursor-style = bar
+        cursor-style-blink = true
+        background = 272822
+        foreground = fdfff1
+        cursor-color = c0c1b5
+        selection-background = 57584f
+        selection-foreground = fdfff1
+        palette = 0=272822
+        palette = 1=f92672
+        palette = 2=a6e22e
+        palette = 3=e6db74
+        palette = 4=fd971f
+        palette = 5=ae81ff
+        palette = 6=66d9ef
+        palette = 7=fdfff1
+        palette = 8=6e7066
+        palette = 9=f92672
+        palette = 10=a6e22e
+        palette = 11=e6db74
+        palette = 12=fd971f
+        palette = 13=ae81ff
+        palette = 14=66d9ef
+        palette = 15=fdfff1
+        """
+        let tmpFile = FileManager.default.temporaryDirectory.appendingPathComponent("ghostty-ios-config-\(ProcessInfo.processInfo.processIdentifier)")
+        try? monokai.write(to: tmpFile, atomically: true, encoding: .utf8)
+        tmpFile.path.withCString { path in
+            ghostty_config_load_file(config, path)
+        }
+        try? FileManager.default.removeItem(at: tmpFile)
+
+        var bgColor = ghostty_config_color_s()
+        let hasBg = ghostty_config_get(config, &bgColor, "background", UInt(MemoryLayout<ghostty_config_color_s>.size))
+        NSLog("📱 applyiOSDefaults: bg get=%d r=%d g=%d b=%d", hasBg ? 1 : 0, bgColor.r, bgColor.g, bgColor.b)
     }
 
     private static func ensureDefaultiOSConfig() {
@@ -139,11 +203,11 @@ final class GhosttyRuntime {
         guard !FileManager.default.fileExists(atPath: configFile.path) else { return }
 
         let defaultConfig = """
-        font-size = 14
+        font-size = 20
         cursor-style = bar
         cursor-style-blink = true
-        background = #272822
-        foreground = #fdfff1
+        background = #ff0000
+        foreground = #00ff00
         cursor-color = #c0c1b5
         selection-background = #57584f
         selection-foreground = #fdfff1
