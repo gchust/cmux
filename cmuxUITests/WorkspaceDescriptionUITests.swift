@@ -102,6 +102,7 @@ final class WorkspaceDescriptionUITests: XCTestCase {
         app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_SETUP"] = "1"
         app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_PATH"] = dataPath
         app.launchEnvironment["CMUX_UI_TEST_FOCUS_SHORTCUTS"] = "1"
+        app.launchEnvironment["CMUX_UI_TEST_SOCKET_SANITY"] = "1"
         app.launchEnvironment["CMUX_SOCKET_PATH"] = socketPath
         app.launchEnvironment["CMUX_TAG"] = launchTag
         return app
