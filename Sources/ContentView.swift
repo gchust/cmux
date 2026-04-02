@@ -1018,6 +1018,19 @@ private func debugCommandPaletteKeyEventSummary(_ event: NSEvent) -> String {
         "chars=\(chars) charsIgnoring=\(charsIgnoring)"
 }
 
+private func debugCommandPaletteTextPreview(_ text: String, limit: Int = 120) -> String {
+    let escaped = text
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\n", with: "\\n")
+        .replacingOccurrences(of: "\r", with: "\\r")
+        .replacingOccurrences(of: "\t", with: "\\t")
+    if escaped.count <= limit {
+        return escaped
+    }
+    let prefix = escaped.prefix(limit)
+    return "\(prefix)..."
+}
+
 private func debugCommandPaletteResponderSummary(_ responder: NSResponder?) -> String {
     guard let responder else { return "nil" }
 
@@ -4832,10 +4845,15 @@ struct ContentView: View {
 
                 if event.keyCode == 36 || event.keyCode == 76 {
                     if normalizedFlags.isEmpty {
+                        let currentText = editor?.string ?? parent.text
 #if DEBUG
                         dlog("palette.wsDescription.editor.handleKeyEvent action=submit")
+                        dlog(
+                            "palette.wsDescription.editor.handleKeyEvent submitText " +
+                            "len=\((currentText as NSString).length) " +
+                            "text=\"\(debugCommandPaletteTextPreview(currentText))\""
+                        )
 #endif
-                        let currentText = editor?.string ?? parent.text
                         if parent.text != currentText {
                             parent.text = currentText
                         }
@@ -8485,7 +8503,8 @@ struct ContentView: View {
         dlog(
             "palette.wsDescription.apply.begin workspace=\(target.workspaceId.uuidString.prefix(8)) " +
             "proposedLen=\((proposedDescription as NSString).length) " +
-            "newlines=\(newlineCount)"
+            "newlines=\(newlineCount) " +
+            "text=\"\(debugCommandPaletteTextPreview(proposedDescription))\""
         )
 #endif
         tabManager.setCustomDescription(tabId: target.workspaceId, description: proposedDescription)
@@ -8498,7 +8517,8 @@ struct ContentView: View {
             dlog(
                 "palette.wsDescription.apply.end workspace=\(target.workspaceId.uuidString.prefix(8)) " +
                 "persistedLen=\((persisted as NSString).length) " +
-                "persistedNewlines=\(persistedNewlineCount)"
+                "persistedNewlines=\(persistedNewlineCount) " +
+                "text=\"\(debugCommandPaletteTextPreview(persisted))\""
             )
         }
 #endif
