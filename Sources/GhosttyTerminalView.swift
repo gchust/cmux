@@ -7035,12 +7035,15 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             : CGFloat(surfaceSize.cell_height_px) / scale
         guard resolvedCellWidth > 0, resolvedCellHeight > 0 else { return nil }
 
-        let visiblePoint = CGPoint(
-            x: point.x - visibleRect.minX,
-            y: visibleRect.maxY - point.y
+        // Match the same top-origin point transform we pass into
+        // `ghostty_surface_mouse_pos` so geometry fallback aligns with
+        // Ghostty quicklook when Cmd is pressed while the pointer is stationary.
+        let viewportPoint = CGPoint(
+            x: point.x,
+            y: bounds.height - point.y
         )
-        let hoveredColumn = max(0, min(Int(floor(visiblePoint.x / resolvedCellWidth)), columns - 1))
-        let hoveredRow = max(0, min(Int(floor(max(visiblePoint.y - 1, 0) / resolvedCellHeight)), rows - 1))
+        let hoveredColumn = max(0, min(Int(floor(viewportPoint.x / resolvedCellWidth)), columns - 1))
+        let hoveredRow = max(0, min(Int(floor(max(viewportPoint.y - 1, 0) / resolvedCellHeight)), rows - 1))
         return (hoveredColumn, hoveredRow)
     }
 
