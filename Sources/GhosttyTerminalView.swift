@@ -459,13 +459,139 @@ func cmuxPasteboardImagePathForTesting(_ pasteboard: NSPasteboard) -> String? {
 enum TerminalOpenURLTarget: Equatable {
     case embeddedBrowser(URL)
     case external(URL)
+    case revealInFinder(URL)
 
     var url: URL {
         switch self {
-        case let .embeddedBrowser(url), let .external(url):
+        case let .embeddedBrowser(url), let .external(url), let .revealInFinder(url):
             return url
         }
     }
+}
+
+private let terminalFileLinkWrappingPairs: [(Character, Character)] = [
+    ("\"", "\""),
+    ("'", "'"),
+    ("(", ")"),
+    ("[", "]"),
+    ("{", "}"),
+    ("<", ">")
+]
+
+private let terminalFileLinkTrailingPunctuation = CharacterSet(charactersIn: ",.;:!?")
+
+private func trimTrailingTerminalFileLinkPunctuation(_ value: String) -> String {
+    var result = value
+    while let lastScalar = result.unicodeScalars.last,
+          terminalFileLinkTrailingPunctuation.contains(lastScalar) {
+        result.unicodeScalars.removeLast()
+    }
+    return result
+}
+
+private func unwrapTerminalFileLinkCandidate(_ value: String) -> String {
+    var result = value
+    while let first = result.first,
+          let last = result.last,
+          terminalFileLinkWrappingPairs.contains(where: { $0.0 == first && $0.1 == last }) {
+        result.removeFirst()
+        result.removeLast()
+    }
+    return result
+}
+
+private func stripTerminalPathLineAndColumnSuffix(_ value: String) -> String {
+    var result = value
+    var strippedComponentCount = 0
+    while strippedComponentCount < 2,
+          let colonIndex = result.lastIndex(of: ":") {
+        let suffix = result[result.index(after: colonIndex)...]
+        guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber) else { break }
+        result = String(result[..<colonIndex])
+        strippedComponentCount += 1
+    }
+    return result
+}
+
+private func terminalFileLinkCandidates(_ rawValue: String) -> [String] {
+    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return [] }
+
+    var candidates: [String] = []
+    func append(_ candidate: String) {
+        guard !candidate.isEmpty, !candidates.contains(candidate) else { return }
+        candidates.append(candidate)
+    }
+
+    append(trimmed)
+    append(unwrapTerminalFileLinkCandidate(trimmed))
+
+    for candidate in Array(candidates) {
+        append(trimTrailingTerminalFileLinkPunctuation(candidate))
+    }
+
+    for candidate in Array(candidates) {
+        append(unwrapTerminalFileLinkCandidate(candidate))
+    }
+
+    for candidate in Array(candidates) {
+        append(stripTerminalPathLineAndColumnSuffix(candidate))
+    }
+
+    for candidate in Array(candidates) {
+        append(trimTrailingTerminalFileLinkPunctuation(candidate))
+    }
+
+    return candidates
+}
+
+private func resolvedExistingTerminalFileURL(fromPath rawPath: String, currentDirectory: String?) -> URL? {
+    let expandedPath = (rawPath as NSString).expandingTildeInPath
+    var pathCandidates: [String] = []
+    func appendPath(_ candidate: String) {
+        guard !candidate.isEmpty, !pathCandidates.contains(candidate) else { return }
+        pathCandidates.append(candidate)
+    }
+
+    if NSString(string: expandedPath).isAbsolutePath {
+        appendPath(expandedPath)
+        appendPath(stripTerminalPathLineAndColumnSuffix(expandedPath))
+    } else if let currentDirectory,
+              !currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let cwdURL = URL(fileURLWithPath: currentDirectory)
+        appendPath(cwdURL.appendingPathComponent(expandedPath).path)
+        let strippedPath = stripTerminalPathLineAndColumnSuffix(expandedPath)
+        if strippedPath != expandedPath {
+            appendPath(cwdURL.appendingPathComponent(strippedPath).path)
+        }
+    }
+
+    for candidate in pathCandidates {
+        guard FileManager.default.fileExists(atPath: candidate) else { continue }
+        return URL(fileURLWithPath: candidate).standardizedFileURL
+    }
+
+    return nil
+}
+
+func resolveTerminalLocalFileURL(_ rawValue: String, currentDirectory: String? = nil) -> URL? {
+    for candidate in terminalFileLinkCandidates(rawValue) {
+        if let resolved = resolvedExistingTerminalFileURL(fromPath: candidate, currentDirectory: currentDirectory) {
+            return resolved
+        }
+
+        if let url = URL(string: candidate), url.isFileURL,
+           let resolved = resolvedExistingTerminalFileURL(fromPath: url.path, currentDirectory: nil) {
+            return resolved
+        }
+    }
+
+    return nil
+}
+
+@MainActor
+private func revealTerminalFileInFinder(_ url: URL) {
+    NSWorkspace.shared.activateFileViewerSelecting([url.standardizedFileURL])
 }
 
 enum GhosttyDefaultBackgroundUpdateScope: Int {
@@ -553,6 +679,13 @@ func resolveTerminalOpenURLTarget(_ rawValue: String) -> TerminalOpenURLTarget? 
         return nil
     }
 
+    if let localFileURL = resolveTerminalLocalFileURL(trimmed) {
+        #if DEBUG
+        dlog("link.resolve result=revealInFinder(localFile) url=\(localFileURL)")
+        #endif
+        return .revealInFinder(localFileURL)
+    }
+
     if NSString(string: trimmed).isAbsolutePath {
         #if DEBUG
         dlog("link.resolve result=external(absolutePath) url=\(trimmed)")
@@ -573,6 +706,12 @@ func resolveTerminalOpenURLTarget(_ rawValue: String) -> TerminalOpenURLTarget? 
             dlog("link.resolve result=embeddedBrowser url=\(parsed)")
             #endif
             return .embeddedBrowser(parsed)
+        }
+        if scheme == "file" {
+            #if DEBUG
+            dlog("link.resolve result=external(fileURL-missing) url=\(parsed)")
+            #endif
+            return .external(parsed)
         }
         #if DEBUG
         dlog("link.resolve result=external(scheme=\(scheme)) url=\(parsed)")
@@ -2766,6 +2905,15 @@ class GhosttyApp {
                 #endif
                 return false
             }
+            if case let .revealInFinder(url) = target {
+                #if DEBUG
+                dlog("link.openURL target=revealInFinder, revealing in Finder url=\(url)")
+                #endif
+                return performOnMain {
+                    revealTerminalFileInFinder(url)
+                    return true
+                }
+            }
             if !BrowserLinkOpenSettings.openTerminalLinksInCmuxBrowser() {
                 #if DEBUG
                 dlog("link.openURL cmuxBrowser=disabled, opening externally url=\(target.url)")
@@ -2859,6 +3007,8 @@ class GhosttyApp {
                         return workspace.newBrowserSplit(from: sourcePanelId, orientation: .horizontal, url: url) != nil
                     }
                 }
+            case .revealInFinder:
+                return false
             }
         default:
             return false
@@ -6509,32 +6659,29 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         let consumed = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, modsFromEvent(event))
 
         // Fallback: if Cmd was held and ghostty didn't handle the click as a link,
-        // check if the word under cursor is a valid file/directory in the terminal's CWD.
-        // This enables cmd-click on bare filenames from commands like `ls`.
+        // reveal the word under cursor when it resolves to a local file path or file URL.
         if !consumed && event.modifierFlags.contains(.command) {
             // Refresh ghostty's cached mouse position so quicklook_word reads
             // up-to-date coordinates (mouseDown skips pos update on double-click).
             let point = convert(event.locationInWindow, from: nil)
             ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, modsFromEvent(event))
-            tryOpenWordAsPath()
+            tryRevealWordInFinder()
         }
     }
 
-    /// Attempt to open the word under the mouse cursor as a file path, resolved
-    /// against the terminal panel's current working directory.
-    private func tryOpenWordAsPath() {
-        guard let resolvedPath = resolveWordUnderCursorAsPath() else { return }
+    /// Attempt to reveal the word under the mouse cursor in Finder when it
+    /// resolves to a local file path or file URL.
+    private func tryRevealWordInFinder() {
+        guard let resolvedURL = resolveWordUnderCursorAsLocalFileURL() else { return }
 
         #if DEBUG
-        dlog("link.wordFallback resolved=\(resolvedPath)")
+        dlog("link.wordFallback reveal=\(resolvedURL.path)")
         #endif
 
-        PreferredEditorSettings.open(URL(fileURLWithPath: resolvedPath))
+        revealTerminalFileInFinder(resolvedURL)
     }
 
-    /// Check if the word under the mouse cursor resolves to an existing file/directory
-    /// in the terminal panel's CWD. Returns the resolved absolute path, or nil.
-    private func resolveWordUnderCursorAsPath() -> String? {
+    private func quicklookWordUnderCursor() -> String? {
         guard let surface = surface else { return nil }
 
         var text = ghostty_text_s()
@@ -6545,15 +6692,18 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         let wordData = Data(bytes: ptr, count: Int(text.text_len))
         guard let decodedWord = String(bytes: wordData, encoding: .utf8) else { return nil }
         let word = decodedWord.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !word.isEmpty, !word.hasPrefix("/") else { return nil }
+        return word.isEmpty ? nil : word
+    }
 
+    /// Resolve the current terminal surface CWD for local relative-path lookup.
+    private func currentDirectoryForWordPathResolution() -> String? {
         guard let termSurface = terminalSurface,
               let workspace = termSurface.owningWorkspace(),
               !workspace.isRemoteTerminalSurface(termSurface.id) else { return nil }
 
         // Use the same CWD fallback chain as Workspace split creation:
         // panelDirectories (live OSC 7) → requestedWorkingDirectory → workspace currentDirectory
-        let cwd: String? = {
+        return {
             if let dir = workspace.panelDirectories[termSurface.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
                !dir.isEmpty { return dir }
             if let dir = workspace.terminalPanel(for: termSurface.id)?
@@ -6562,15 +6712,17 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             let dir = workspace.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
             return dir.isEmpty ? nil : dir
         }()
-        guard let cwd else { return nil }
-
-        let resolvedPath = (cwd as NSString).appendingPathComponent(word)
-        guard FileManager.default.fileExists(atPath: resolvedPath) else { return nil }
-        return resolvedPath
     }
 
-    /// Update the pointing-hand cursor when Cmd-hovering over a bare filename
-    /// that exists in the terminal's CWD.
+    /// Check if the word under the mouse cursor resolves to an existing local
+    /// file/directory, using the panel CWD for relative paths.
+    private func resolveWordUnderCursorAsLocalFileURL() -> URL? {
+        guard let word = quicklookWordUnderCursor() else { return nil }
+        return resolveTerminalLocalFileURL(word, currentDirectory: currentDirectoryForWordPathResolution())
+    }
+
+    /// Update the pointing-hand cursor when Cmd-hovering over a local file path
+    /// or file URL, including bare relative names from commands like `ls`.
     private func updateWordPathHover(cmdHeld: Bool) {
         guard cmdHeld else {
             if wordPathHoverActive {
@@ -6580,7 +6732,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             return
         }
 
-        if resolveWordUnderCursorAsPath() != nil {
+        if resolveWordUnderCursorAsLocalFileURL() != nil {
             if !wordPathHoverActive {
                 wordPathHoverActive = true
                 NSCursor.pointingHand.push()
@@ -6673,6 +6825,33 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             keyEquivalent: ""
         )
         pasteItem.target = self
+        if let localFileURL = resolveWordUnderCursorAsLocalFileURL() {
+            menu.addItem(.separator())
+
+            let revealItem = menu.addItem(
+                withTitle: String(localized: "terminalContextMenu.revealInFinder", defaultValue: "Reveal in Finder"),
+                action: #selector(revealResolvedWordPathInFinder(_:)),
+                keyEquivalent: ""
+            )
+            revealItem.target = self
+            revealItem.representedObject = localFileURL
+            revealItem.image = NSImage(
+                systemSymbolName: "folder",
+                accessibilityDescription: nil
+            )
+
+            let openItem = menu.addItem(
+                withTitle: String(localized: "terminalContextMenu.open", defaultValue: "Open"),
+                action: #selector(openResolvedWordPath(_:)),
+                keyEquivalent: ""
+            )
+            openItem.target = self
+            openItem.representedObject = localFileURL
+            openItem.image = NSImage(
+                systemSymbolName: "arrow.up.forward.app",
+                accessibilityDescription: nil
+            )
+        }
         menu.addItem(.separator())
         let splitHorizontallyItem = menu.addItem(
             withTitle: String(localized: "terminalContextMenu.splitHorizontally", defaultValue: "Split Horizontally"),
@@ -6747,6 +6926,16 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
     @objc private func resetTerminal(_ sender: Any?) {
         _ = performBindingAction("reset")
+    }
+
+    @objc private func revealResolvedWordPathInFinder(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        revealTerminalFileInFinder(url)
+    }
+
+    @objc private func openResolvedWordPath(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     override func mouseMoved(with event: NSEvent) {
