@@ -4884,6 +4884,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return commandPaletteVisibilityByWindowId[windowId] ?? false
     }
 
+    func isCommandPaletteEffectivelyVisible(for window: NSWindow) -> Bool {
+        isCommandPaletteEffectivelyVisible(in: window)
+    }
+
     func shouldBlockFirstResponderChangeWhileCommandPaletteVisible(
         window: NSWindow,
         responder: NSResponder?
