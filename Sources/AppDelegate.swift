@@ -1691,13 +1691,20 @@ func shouldConsumeShortcutWhileCommandPaletteVisible(
 
 func shouldSubmitCommandPaletteWithReturn(
     keyCode: UInt16,
-    flags: NSEvent.ModifierFlags
+    flags: NSEvent.ModifierFlags,
+    mode: String
 ) -> Bool {
     guard keyCode == 36 || keyCode == 76 else { return false }
     let normalizedFlags = flags
         .intersection(.deviceIndependentFlagsMask)
         .subtracting([.numericPad, .function, .capsLock])
-    return normalizedFlags == [] || normalizedFlags == [.shift]
+    if normalizedFlags.isEmpty {
+        return true
+    }
+    if normalizedFlags == [.shift] {
+        return mode != "workspace_description_input"
+    }
+    return false
 }
 
 func commandPaletteFieldEditorHasMarkedText(in window: NSWindow) -> Bool {
@@ -9605,6 +9612,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if commandPaletteInteractiveInTargetWindow,
            let paletteWindow = commandPaletteShortcutWindow {
             let paletteFieldEditorHasMarkedText = commandPaletteFieldEditorHasMarkedText(in: paletteWindow)
+            let paletteSnapshot = mainWindowId(for: paletteWindow).map(commandPaletteSnapshot(windowId:)) ?? .empty
             if normalizedFlags.isEmpty, event.keyCode == 53 {
                 if paletteFieldEditorHasMarkedText {
                     return false
@@ -9613,10 +9621,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 return true
             }
 
-            if shouldSubmitCommandPaletteWithReturn(
+            let shouldSubmitPalette = shouldSubmitCommandPaletteWithReturn(
                 keyCode: event.keyCode,
-                flags: event.modifierFlags
-            ) {
+                flags: event.modifierFlags,
+                mode: paletteSnapshot.mode
+            )
+#if DEBUG
+            if event.keyCode == 36 || event.keyCode == 76 {
+                dlog(
+                    "shortcut.palette.return target={\(debugWindowToken(paletteWindow))} " +
+                    "mode=\(paletteSnapshot.mode) " +
+                    "submit=\(shouldSubmitPalette ? 1 : 0) " +
+                    "marked=\(paletteFieldEditorHasMarkedText ? 1 : 0) " +
+                    "\(debugShortcutRouteSnapshot(event: event))"
+                )
+            }
+#endif
+            if shouldSubmitPalette {
                 if paletteFieldEditorHasMarkedText {
                     return false
                 }

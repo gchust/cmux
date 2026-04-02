@@ -4381,7 +4381,8 @@ struct ContentView: View {
 
                 if shouldSubmitCommandPaletteWithReturn(
                     keyCode: event.keyCode,
-                    flags: event.modifierFlags
+                    flags: event.modifierFlags,
+                    mode: "single_line"
                 ) {
                     parent.onSubmit()
                     return true
@@ -7666,6 +7667,16 @@ struct ContentView: View {
         case .renameConfirm(let target, let proposedName):
             applyRenameFlow(target: target, proposedName: proposedName)
         case .workspaceDescriptionInput(let target):
+#if DEBUG
+            let newlineCount = commandPaletteWorkspaceDescriptionDraft.reduce(into: 0) { count, character in
+                if character == "\n" { count += 1 }
+            }
+            dlog(
+                "palette.wsDescription.submit.request workspace=\(target.workspaceId.uuidString.prefix(8)) " +
+                "draftLen=\((commandPaletteWorkspaceDescriptionDraft as NSString).length) " +
+                "newlines=\(newlineCount)"
+            )
+#endif
             applyWorkspaceDescriptionFlow(
                 target: target,
                 proposedDescription: commandPaletteWorkspaceDescriptionDraft
@@ -7866,6 +7877,20 @@ struct ContentView: View {
         preferredFocusTarget: CommandPaletteRestoreFocusTarget?
     ) {
         let focusTarget = preferredFocusTarget ?? commandPaletteRestoreFocusTarget
+#if DEBUG
+        if case .workspaceDescriptionInput(let target) = commandPaletteMode {
+            let newlineCount = commandPaletteWorkspaceDescriptionDraft.reduce(into: 0) { count, character in
+                if character == "\n" { count += 1 }
+            }
+            dlog(
+                "palette.wsDescription.dismiss workspace=\(target.workspaceId.uuidString.prefix(8)) " +
+                "restoreFocus=\(restoreFocus ? 1 : 0) " +
+                "draftLen=\((commandPaletteWorkspaceDescriptionDraft as NSString).length) " +
+                "newlines=\(newlineCount) " +
+                "window={\(debugCommandPaletteWindowSummary(observedWindow ?? NSApp.keyWindow ?? NSApp.mainWindow))}"
+            )
+        }
+#endif
         cancelCommandPaletteSearch()
         commandPaletteSearchRequestID &+= 1
         isCommandPalettePresented = false
@@ -8452,7 +8477,30 @@ struct ContentView: View {
             NSSound.beep()
             return
         }
+#if DEBUG
+        let newlineCount = proposedDescription.reduce(into: 0) { count, character in
+            if character == "\n" { count += 1 }
+        }
+        dlog(
+            "palette.wsDescription.apply.begin workspace=\(target.workspaceId.uuidString.prefix(8)) " +
+            "proposedLen=\((proposedDescription as NSString).length) " +
+            "newlines=\(newlineCount)"
+        )
+#endif
         tabManager.setCustomDescription(tabId: target.workspaceId, description: proposedDescription)
+#if DEBUG
+        if let updatedWorkspace = tabManager.tabs.first(where: { $0.id == target.workspaceId }) {
+            let persisted = updatedWorkspace.customDescription ?? ""
+            let persistedNewlineCount = persisted.reduce(into: 0) { count, character in
+                if character == "\n" { count += 1 }
+            }
+            dlog(
+                "palette.wsDescription.apply.end workspace=\(target.workspaceId.uuidString.prefix(8)) " +
+                "persistedLen=\((persisted as NSString).length) " +
+                "persistedNewlines=\(persistedNewlineCount)"
+            )
+        }
+#endif
         dismissCommandPalette()
     }
 
