@@ -16,6 +16,7 @@ enum TerminalTransportEvent: Sendable {
     case disconnected(String?)
     case notice(String)
     case trustedHostKey(String)
+    case remotePlatform(RemotePlatform)
 }
 
 protocol TerminalTransport: AnyObject {
@@ -129,7 +130,11 @@ struct DefaultTerminalTransportFactory: TerminalTransportFactory {
         sessionName: String,
         resumeState: TerminalRemoteDaemonResumeState?
     ) -> TerminalTransport {
+        NSLog("📱 TransportFactory: hostname=%@ wsPort=%@ wsSecret=%@ transportPref=%@ teamID=%@ hasWebSocket=%d",
+              host.hostname, host.wsPort.map(String.init) ?? "nil", host.wsSecret != nil ? "set" : "nil",
+              String(describing: host.transportPreference), host.teamID ?? "nil", host.hasWebSocketEndpoint ? 1 : 0)
         if host.hasWebSocketEndpoint {
+            NSLog("📱 TransportFactory: → WebSocket transport")
             return TerminalWebSocketTransport(
                 host: host,
                 sessionName: sessionName,
@@ -138,8 +143,10 @@ struct DefaultTerminalTransportFactory: TerminalTransportFactory {
         }
         if host.transportPreference == .remoteDaemon {
             if let remoteDaemonBuilder {
+                NSLog("📱 TransportFactory: → custom remoteDaemon builder")
                 return remoteDaemonBuilder(host, credentials, sessionName, resumeState)
             }
+            NSLog("📱 TransportFactory: → TerminalDirectDaemonTransport")
             return TerminalDirectDaemonTransport(
                 host: host,
                 credentials: credentials,
@@ -148,6 +155,7 @@ struct DefaultTerminalTransportFactory: TerminalTransportFactory {
                 ticketService: daemonTicketService
             )
         }
+        NSLog("📱 TransportFactory: → raw SSH transport")
         return TerminalSSHTransport(host: host, credentials: credentials, sessionName: sessionName)
     }
 }
@@ -203,6 +211,7 @@ final class TerminalSSHTransport: @unchecked Sendable, TerminalTransport {
         try await shellHandler.started.get()
 
         eventHandler?(.connected)
+        try await send(Data("export COLORTERM=truecolor; tmux setenv -g COLORTERM truecolor 2>/dev/null\n".utf8))
         let bootstrapCommand = host.bootstrapCommand.replacingOccurrences(of: "{{session}}", with: sessionName)
         try await send(Data((bootstrapCommand + "\n").utf8))
     }

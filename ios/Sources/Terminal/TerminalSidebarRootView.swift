@@ -114,7 +114,12 @@ struct TerminalSidebarRootView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 14) {
                             ForEach(store.hosts) { host in
-                                Button {
+                                TerminalServerPinView(
+                                    host: host,
+                                    workspaceCount: store.workspaceCount(for: host),
+                                    isConfigured: store.isConfigured(host)
+                                )
+                                .onTapGesture {
                                     if store.isConfigured(host) {
                                         let workspaceID = store.startWorkspace(on: host)
                                         navigationPath.append(workspaceID)
@@ -125,14 +130,7 @@ struct TerminalSidebarRootView: View {
                                             credentials: store.credentials(for: host)
                                         )
                                     }
-                                } label: {
-                                    TerminalServerPinView(
-                                        host: host,
-                                        workspaceCount: store.workspaceCount(for: host),
-                                        isConfigured: store.isConfigured(host)
-                                    )
                                 }
-                                .buttonStyle(.plain)
                                 .contextMenu {
                                     Button(TerminalHomeStrings.renameServerLabel) {
                                         renameText = host.name
@@ -824,9 +822,16 @@ struct TerminalWorkspaceScreen: View {
 
     private static let monokaiBackground = Color(red: 0x27/255.0, green: 0x28/255.0, blue: 0x22/255.0)
 
+    private var resolvedBackground: Color {
+        if let surfaceBg = controller.surfaceView?.configBackgroundColor {
+            return Color(surfaceBg)
+        }
+        return Self.monokaiBackground
+    }
+
     var body: some View {
         ZStack {
-            Self.monokaiBackground
+            resolvedBackground
                 .ignoresSafeArea()
 
             if let surfaceView = controller.surfaceView {
@@ -858,7 +863,7 @@ struct TerminalWorkspaceScreen: View {
         }
         .navigationTitle(workspace.title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(Self.monokaiBackground, for: .navigationBar)
+        .toolbarBackground(resolvedBackground, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {

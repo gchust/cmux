@@ -571,6 +571,28 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
             }
         }
         #endif
+        #if DEBUG
+        // Detect OSC 11 query (\x1b]11;?\x07 or \x1b]11;?\x1b\\) from remote TUI (e.g. Codex).
+        if data.count < 500 {
+            let hasOSC11Query = data.withUnsafeBytes { buffer -> Bool in
+                guard let base = buffer.baseAddress else { return false }
+                let bytes = base.assumingMemoryBound(to: UInt8.self)
+                for i in 0..<(data.count - 4) {
+                    if bytes[i] == 0x1b, bytes[i+1] == 0x5d, // ESC ]
+                       bytes[i+2] == 0x31, bytes[i+3] == 0x31 { // "11"
+                        return true
+                    }
+                }
+                return false
+            }
+            if hasOSC11Query {
+                let escaped = data.map { byte in
+                    byte < 32 || byte == 127 ? String(format: "\\x%02x", byte) : String(UnicodeScalar(byte))
+                }.joined()
+                NSLog("🎨 processOutput: detected OSC 11 query in incoming data (%d bytes): %@", data.count, escaped)
+            }
+        }
+        #endif
         data.withUnsafeBytes { buffer in
             guard let baseAddress = buffer.baseAddress else { return }
             let pointer = baseAddress.assumingMemoryBound(to: CChar.self)
@@ -774,6 +796,8 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         }
     }
 
+    private(set) var configBackgroundColor: UIColor?
+
     private func applyBackgroundColorFromConfig(_ config: ghostty_config_t) {
         var bgColor = ghostty_config_color_s()
         let bgKey = "background"
@@ -781,6 +805,15 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
             let bg = UIColor(red: CGFloat(bgColor.r) / 255.0, green: CGFloat(bgColor.g) / 255.0, blue: CGFloat(bgColor.b) / 255.0, alpha: 1.0)
             backgroundColor = bg
             snapshotFallbackView.backgroundColor = bg
+            configBackgroundColor = bg
+            #if DEBUG
+            NSLog("🎨 GhosttySurfaceView.applyBg: config r=%d g=%d b=%d -> UIColor(%@), hardcoded Monokai=#272822 r=39 g=40 b=34",
+                  bgColor.r, bgColor.g, bgColor.b, bg.debugDescription)
+            #endif
+        } else {
+            #if DEBUG
+            NSLog("🎨 GhosttySurfaceView.applyBg: ghostty_config_get returned false, no bg color from config")
+            #endif
         }
         var fgColor = ghostty_config_color_s()
         let fgKey = "foreground"
@@ -1016,6 +1049,20 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
     ) {
         guard let userdata, let data, len > 0 else { return }
         let bytes = Data(bytes: data, count: Int(len))
+        #if DEBUG
+        // Detect OSC responses (ESC ] ...) flowing back to the remote terminal.
+        // OSC 11 response = "\x1b]11;rgb:RRRR/GGGG/BBBB..." (background color report).
+        if bytes.count < 200, let str = String(data: bytes, encoding: .utf8) {
+            let escaped = str.unicodeScalars.map { scalar in
+                scalar.value < 32 || scalar.value == 127
+                    ? String(format: "\\x%02x", scalar.value)
+                    : String(scalar)
+            }.joined()
+            if escaped.contains("\\x1b]") || escaped.contains("\\x1b[") {
+                NSLog("🎨 io_write OSC/CSI response (%d bytes): %@", bytes.count, escaped)
+            }
+        }
+        #endif
         GhosttySurfaceBridge.fromOpaque(userdata)?.handleWrite(bytes)
     }
 
