@@ -6524,7 +6524,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             surface,
             point.x,
             bounds.height - point.y,
-            hoverModsFromFlags(event.modifierFlags, suppressCommandPathHover: suppressCommandPathHover)
+            modsFromEvent(event)
         )
         updateWordPathHover(
             cmdHeld: event.modifierFlags.contains(.command),
@@ -6535,16 +6535,6 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     private func shouldSuppressCommandPathHover(for flags: NSEvent.ModifierFlags) -> Bool {
         guard flags.contains(.command), let surface else { return false }
         return ghostty_surface_has_selection(surface)
-    }
-
-    private func hoverModsFromFlags(
-        _ flags: NSEvent.ModifierFlags,
-        suppressCommandPathHover: Bool
-    ) -> ghostty_input_mods_e {
-        if suppressCommandPathHover {
-            return modsFromFlags(flags.subtracting(.command))
-        }
-        return modsFromFlags(flags)
     }
 
     private func modsFromEvent(_ event: NSEvent) -> ghostty_input_mods_e {
@@ -7040,7 +7030,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             surface,
             point.x,
             bounds.height - point.y,
-            hoverModsFromFlags(event.modifierFlags, suppressCommandPathHover: suppressCommandPathHover)
+            modsFromEvent(event)
         )
         updateWordPathHover(
             cmdHeld: event.modifierFlags.contains(.command),
@@ -7058,7 +7048,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             surface,
             point.x,
             bounds.height - point.y,
-            hoverModsFromFlags(event.modifierFlags, suppressCommandPathHover: suppressCommandPathHover)
+            modsFromEvent(event)
         )
         updateWordPathHover(
             cmdHeld: event.modifierFlags.contains(.command),
