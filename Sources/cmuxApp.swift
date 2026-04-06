@@ -2719,103 +2719,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     }
 }
 
-private struct SettingsSearchField: NSViewRepresentable {
-    @Binding var text: String
-    let placeholder: String
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
-        field.placeholderString = placeholder
-        field.delegate = context.coordinator
-        field.controlSize = .small
-        field.font = .systemFont(ofSize: 12)
-        (field.cell as? NSSearchFieldCell)?.sendsSearchStringImmediately = true
-        return field
-    }
-
-    func updateNSView(_ nsView: NSSearchField, context: Context) {
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
-    }
-
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        @Binding var text: String
-
-        init(text: Binding<String>) {
-            _text = text
-        }
-
-        func controlTextDidChange(_ obj: Notification) {
-            if let field = obj.object as? NSSearchField {
-                text = field.stringValue
-            }
-        }
-    }
-}
-
-private struct SettingsTOCSidebar: View {
-    @Binding var searchText: String
-    let activeSection: SettingsSection?
-    let onSelect: (SettingsSection) -> Void
-
-    private var filteredSections: [SettingsSection] {
-        guard !searchText.isEmpty else { return Array(SettingsSection.allCases) }
-        return SettingsSection.allCases.filter { $0.matches(searchText) }
-    }
-
-    @State private var selection: SettingsSection?
-    @State private var isUserNavigating = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            SettingsSearchField(
-                text: $searchText,
-                placeholder: String(localized: "settings.search.placeholder", defaultValue: "Search settings")
-            )
-            .frame(height: 22)
-            .padding(.horizontal, 12)
-            .padding(.top, 52)
-            .padding(.bottom, 8)
-
-            List(filteredSections, selection: $selection) { section in
-                Label {
-                    Text(section.title)
-                        .font(.system(size: 13))
-                } icon: {
-                    Image(systemName: section.icon)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .tag(section)
-            }
-            .listStyle(.sidebar)
-            .onChange(of: selection) { _, newValue in
-                guard let section = newValue else { return }
-                isUserNavigating = true
-                onSelect(section)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    isUserNavigating = false
-                }
-            }
-            .onChange(of: activeSection) { _, newValue in
-                guard !isUserNavigating else { return }
-                if selection != newValue {
-                    selection = newValue
-                }
-            }
-            .onAppear {
-                selection = activeSection
-            }
-        }
-        .frame(width: 200)
-    }
-}
-
 private final class SidebarDebugWindowController: NSWindowController, NSWindowDelegate {
     static let shared = SidebarDebugWindowController()
 
@@ -4164,7 +4067,6 @@ struct SettingsView: View {
     @State private var shortcutResetToken = UUID()
     @State private var topBlurOpacity: Double = 0
     @State private var topBlurBaselineOffset: CGFloat?
-    @State private var settingsTitleLeadingInset: CGFloat = 92
     @State private var showClearBrowserHistoryConfirmation = false
     @State private var showOpenAccessConfirmation = false
     @State private var pendingOpenAccessMode: SocketControlMode?
@@ -4184,7 +4086,8 @@ struct SettingsView: View {
     @State private var workspaceTabPaletteEntries = WorkspaceTabColorSettings.palette()
     @State private var trustedDirectoriesDraft: String = CmuxDirectoryTrust.shared.allTrustedPaths.joined(separator: "\n")
     @State private var settingsSearchText = ""
-    @State private var activeSection: SettingsSection?
+    @State private var selectedSection: SettingsSection?
+    @State private var isUserNavigating = false
 
     private var selectedWorkspacePlacement: NewWorkspacePlacement {
         NewWorkspacePlacement(rawValue: newWorkspacePlacement) ?? WorkspacePlacementSettings.defaultPlacement
@@ -4659,20 +4562,29 @@ struct SettingsView: View {
         section.matches(settingsSearchText)
     }
 
+    private var filteredSections: [SettingsSection] {
+        guard !settingsSearchText.isEmpty else { return Array(SettingsSection.allCases) }
+        return SettingsSection.allCases.filter { $0.matches(settingsSearchText) }
+    }
+
     var body: some View {
         let _ = keyboardShortcutSettingsObserver.revision
-        ScrollViewReader { proxy in
-            HStack(spacing: 0) {
-            SettingsTOCSidebar(
-                searchText: $settingsSearchText,
-                activeSection: activeSection,
-                onSelect: { section in
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        proxy.scrollTo(section, anchor: .top)
-                    }
+        NavigationSplitView {
+            List(filteredSections, selection: $selectedSection) { section in
+                Label {
+                    Text(section.title)
+                        .font(.system(size: 13))
+                } icon: {
+                    Image(systemName: section.icon)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
-            )
-            Divider()
+                .tag(section)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+        } detail: {
+        ScrollViewReader { proxy in
             ZStack(alignment: .top) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -5931,17 +5843,18 @@ struct SettingsView: View {
                 topBlurOpacity = blurOpacity(forContentOffset: value)
             }
             .onPreferenceChange(SettingsSectionOffsetsPreferenceKey.self) { offsets in
+                guard !isUserNavigating else { return }
                 let headerHeight: CGFloat = 62
                 let closest = offsets
                     .filter { $0.value <= headerHeight + 20 }
                     .max(by: { $0.value < $1.value })
-                activeSection = closest?.key ?? offsets.min(by: { $0.value < $1.value })?.key
+                let resolved = closest?.key ?? offsets.min(by: { $0.value < $1.value })?.key
+                if selectedSection != resolved {
+                    selectedSection = resolved
+                }
             }
 
             ZStack(alignment: .top) {
-                SettingsTitleLeadingInsetReader(inset: $settingsTitleLeadingInset)
-                    .frame(width: 0, height: 0)
-
                 AboutVisualEffectBackground(material: .underWindowBackground, blendingMode: .withinWindow)
                     .mask(
                         LinearGradient(
@@ -6000,7 +5913,34 @@ struct SettingsView: View {
                     alignment: .bottom
                 )
         } // end ZStack (main content)
-        } // end HStack (sidebar + content)
+        .onChange(of: selectedSection) { _, newValue in
+            guard let section = newValue else { return }
+            isUserNavigating = true
+            withAnimation(.easeInOut(duration: 0.2)) {
+                proxy.scrollTo(section, anchor: .top)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                isUserNavigating = false
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SettingsNavigationRequest.notificationName)) { notification in
+            guard let target = SettingsNavigationRequest.target(from: notification) else { return }
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    switch target {
+                    case .browser:
+                        proxy.scrollTo(SettingsSection.browser, anchor: .top)
+                    case .keyboardShortcuts:
+                        proxy.scrollTo(SettingsSection.keyboardShortcuts, anchor: .top)
+                    case .browserImport:
+                        proxy.scrollTo(SettingsNavigationTarget.browserImport, anchor: .top)
+                    }
+                }
+            }
+        }
+        } // end ScrollViewReader
+        } // end NavigationSplitView detail
+        .searchable(text: $settingsSearchText, placement: .sidebar, prompt: String(localized: "settings.search.placeholder", defaultValue: "Search settings"))
         .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         .toggleStyle(.switch)
         .onAppear {
@@ -6031,21 +5971,6 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             reloadWorkspaceTabColorSettings()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: SettingsNavigationRequest.notificationName)) { notification in
-            guard let target = SettingsNavigationRequest.target(from: notification) else { return }
-            DispatchQueue.main.async {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    switch target {
-                    case .browser:
-                        proxy.scrollTo(SettingsSection.browser, anchor: .top)
-                    case .keyboardShortcuts:
-                        proxy.scrollTo(SettingsSection.keyboardShortcuts, anchor: .top)
-                    case .browserImport:
-                        proxy.scrollTo(SettingsNavigationTarget.browserImport, anchor: .top)
-                    }
-                }
-            }
         }
         .confirmationDialog(
             String(localized: "settings.browser.history.clearDialog.title", defaultValue: "Clear browser history?"),
@@ -6094,7 +6019,6 @@ struct SettingsView: View {
             Button(String(localized: "common.ok", defaultValue: "OK"), role: .cancel) {}
         } message: {
             Text(notificationCustomSoundErrorAlertMessage)
-        }
         }
     }
 
@@ -6255,29 +6179,6 @@ private struct SettingsSectionOffsetsPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout [SettingsSection: CGFloat], nextValue: () -> [SettingsSection: CGFloat]) {
         value.merge(nextValue()) { _, new in new }
-    }
-}
-
-private struct SettingsTitleLeadingInsetReader: NSViewRepresentable {
-    @Binding var inset: CGFloat
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            guard let window = nsView.window else { return }
-            let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-            let maxX = buttons
-                .compactMap { window.standardWindowButton($0)?.frame.maxX }
-                .max() ?? 78
-            let nextInset = maxX + 14
-            if abs(nextInset - inset) > 0.5 {
-                inset = nextInset
-            }
-        }
     }
 }
 
