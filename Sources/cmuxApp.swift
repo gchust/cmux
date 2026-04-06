@@ -4245,6 +4245,7 @@ struct SettingsView: View {
     @State private var settingsSearchText = ""
     @State private var selectedSection: SettingsSection?
     @State private var isUserNavigating = false
+    @State private var isScrollTracking = false
 
     private var selectedWorkspacePlacement: NewWorkspacePlacement {
         NewWorkspacePlacement(rawValue: newWorkspacePlacement) ?? WorkspacePlacementSettings.defaultPlacement
@@ -4738,6 +4739,14 @@ struct SettingsView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    if filteredSections.isEmpty {
+                        ContentUnavailableView(
+                            String(localized: "settings.search.noResults", defaultValue: "No Results"),
+                            systemImage: "magnifyingglass",
+                            description: Text(String(localized: "settings.search.noResults.description", defaultValue: "No settings match your search."))
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 200)
+                    }
                     if sectionVisible(.app) {
                     SettingsSectionHeader(title: String(localized: "settings.section.app", defaultValue: "App"), section: .app)
                         .id(SettingsSection.app)
@@ -5985,6 +5994,7 @@ struct SettingsView: View {
                     .max(by: { $0.value < $1.value })
                 let resolved = closest?.key ?? offsets.min(by: { $0.value < $1.value })?.key
                 if selectedSection != resolved {
+                    isScrollTracking = true
                     selectedSection = resolved
                 }
             }
@@ -6003,6 +6013,10 @@ struct SettingsView: View {
             }
         .onChange(of: selectedSection) { _, newValue in
             guard let section = newValue else { return }
+            if isScrollTracking {
+                isScrollTracking = false
+                return
+            }
             isUserNavigating = true
             withAnimation(.easeInOut(duration: 0.2)) {
                 proxy.scrollTo(section, anchor: .top)
@@ -6013,6 +6027,7 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: SettingsNavigationRequest.notificationName)) { notification in
             guard let target = SettingsNavigationRequest.target(from: notification) else { return }
+            settingsSearchText = ""
             DispatchQueue.main.async {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     switch target {
