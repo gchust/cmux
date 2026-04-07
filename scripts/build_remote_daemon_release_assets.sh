@@ -7,12 +7,17 @@ Usage: scripts/build_remote_daemon_release_assets.sh \
   --version <app-version> \
   --release-tag <tag> \
   --repo <owner/repo> \
-  --output-dir <dir>
+  --output-dir <dir> \
+  [--asset-suffix <suffix>]
 
 Builds cmuxd-remote release assets for the supported remote platforms and emits:
-  cmuxd-remote-<goos>-<goarch>
-  cmuxd-remote-checksums.txt
-  cmuxd-remote-manifest.json
+  cmuxd-remote-<goos>-<goarch>[-<suffix>]
+  cmuxd-remote-checksums[-<suffix>].txt
+  cmuxd-remote-manifest[-<suffix>].json
+
+When --asset-suffix is provided, all output filenames and manifest download URLs
+include the suffix, making each build's assets immutable (used by nightly builds
+to avoid checksum mismatches when assets are overwritten by later builds).
 EOF
 }
 
@@ -20,6 +25,7 @@ VERSION=""
 RELEASE_TAG=""
 REPO=""
 OUTPUT_DIR=""
+ASSET_SUFFIX=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output-dir)
       OUTPUT_DIR="${2:-}"
+      shift 2
+      ;;
+    --asset-suffix)
+      ASSET_SUFFIX="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -69,9 +79,26 @@ mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 rm -f "$OUTPUT_DIR"/cmuxd-remote-* "$OUTPUT_DIR"/cmuxd-remote-checksums.txt "$OUTPUT_DIR"/cmuxd-remote-manifest.json
 
+<<<<<<< HEAD
 CHECKSUMS_ASSET_NAME="cmuxd-remote-checksums.txt"
+=======
+DAEMON_GO_LDFLAGS="-s -w -X main.version=${VERSION}"
+DAEMON_GO_BUILD_ARGS=(
+  build
+  -trimpath
+  -buildvcs=false
+  -ldflags "$DAEMON_GO_LDFLAGS"
+)
+
+SUFFIX_TAG=""
+if [[ -n "$ASSET_SUFFIX" ]]; then
+  SUFFIX_TAG="-${ASSET_SUFFIX}"
+fi
+
+CHECKSUMS_ASSET_NAME="cmuxd-remote-checksums${SUFFIX_TAG}.txt"
+>>>>>>> origin/main
 CHECKSUMS_PATH="${OUTPUT_DIR}/${CHECKSUMS_ASSET_NAME}"
-MANIFEST_PATH="${OUTPUT_DIR}/cmuxd-remote-manifest.json"
+MANIFEST_PATH="${OUTPUT_DIR}/cmuxd-remote-manifest${SUFFIX_TAG}.json"
 
 TARGETS=(
   "darwin arm64"
@@ -87,7 +114,7 @@ trap 'rm -f "$ENTRIES_FILE"' EXIT
 
 for target in "${TARGETS[@]}"; do
   read -r GOOS GOARCH <<<"$target"
-  ASSET_NAME="cmuxd-remote-${GOOS}-${GOARCH}"
+  ASSET_NAME="cmuxd-remote-${GOOS}-${GOARCH}${SUFFIX_TAG}"
   OUTPUT_PATH="${OUTPUT_DIR}/${ASSET_NAME}"
   case "${GOOS}-${GOARCH}" in
     darwin-arm64)
@@ -112,8 +139,12 @@ for target in "${TARGETS[@]}"; do
   BUILD_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cmuxd-remote-cache.${GOOS}-${GOARCH}.XXXXXX")"
   BUILD_GLOBAL_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cmuxd-remote-global-cache.${GOOS}-${GOARCH}.XXXXXX")"
 
+  # Build into a temp path first, then rename (the binary content is the same
+  # regardless of suffix, so we build once and move).
+  BUILD_PATH="${OUTPUT_DIR}/cmuxd-remote-${GOOS}-${GOARCH}.build"
   (
     cd "$DAEMON_ROOT"
+<<<<<<< HEAD
     zig build \
       -Doptimize=ReleaseFast \
       -Dtarget="${ZIG_TARGET}" \
@@ -124,6 +155,16 @@ for target in "${TARGETS[@]}"; do
   )
   cp "${BUILD_PREFIX}/bin/cmuxd-remote" "$OUTPUT_PATH"
   rm -rf "$BUILD_PREFIX" "$BUILD_CACHE_DIR" "$BUILD_GLOBAL_CACHE_DIR"
+=======
+    GOOS="$GOOS" \
+    GOARCH="$GOARCH" \
+    CGO_ENABLED=0 \
+    go "${DAEMON_GO_BUILD_ARGS[@]}" \
+      -o "$BUILD_PATH" \
+      ./cmd/cmuxd-remote
+  )
+  mv "$BUILD_PATH" "$OUTPUT_PATH"
+>>>>>>> origin/main
   chmod 755 "$OUTPUT_PATH"
 
   SHA256="$(shasum -a 256 "$OUTPUT_PATH" | awk '{print $1}')"

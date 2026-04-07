@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // Ghostty embedding API. The documentation for the embedding API is
 // only within the Zig source files that define the implementations. This
 // isn't meant to be a general purpose embedding API (yet) so there hasn't
@@ -8,10 +9,17 @@
 // ghostty_surface_process_output, and ghostty_surface_text_input.
 #ifndef GHOSTTY_H
 #define GHOSTTY_H
+=======
+#ifndef CMUX_GHOSTTY_BRIDGE_HEADER_H
+#define CMUX_GHOSTTY_BRIDGE_HEADER_H
 
-#ifdef __cplusplus
-extern "C" {
+// Keep the Swift bridge on Ghostty's canonical C API header so Xcode and the
+// bundled GhosttyKit stay ABI-aligned across submodule upgrades.
+#include "ghostty/include/ghostty.h"
+>>>>>>> origin/main
+
 #endif
+<<<<<<< HEAD
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1185,3 +1193,5 @@ bool ghostty_benchmark_cli(const char*, const char*);
 #endif
 
 #endif /* GHOSTTY_H */
+=======
+>>>>>>> origin/main
