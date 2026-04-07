@@ -65,7 +65,7 @@ pub enum PaneRuntimeEvent {
     Output {
         session_id: String,
         pane_id: String,
-        len: usize,
+        data: Vec<u8>,
     },
     Busy {
         session_id: String,
@@ -335,7 +335,7 @@ fn run_pane_actor(
                         events(PaneRuntimeEvent::Output {
                             session_id: session_id.clone(),
                             pane_id: pane_id.clone(),
-                            len: normalized.len(),
+                            data: normalized,
                         });
                     }
                     Ok(ReaderEvent::Eof) | Err(_) => {

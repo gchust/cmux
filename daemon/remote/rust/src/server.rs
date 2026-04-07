@@ -59,6 +59,7 @@ struct CoreState {
     next_event_id: u64,
     sessions: BTreeMap<String, Arc<Session>>,
     buffers: BTreeMap<String, String>,
+    pane_pipes: BTreeMap<String, Arc<Mutex<std::process::ChildStdin>>>,
     wait_signals: BTreeMap<String, u64>,
     used_nonces: BTreeMap<String, i64>,
     event_base_cursor: u64,
@@ -78,6 +79,7 @@ impl Daemon {
                     next_event_id: 1,
                     sessions: BTreeMap::new(),
                     buffers: BTreeMap::new(),
+                    pane_pipes: BTreeMap::new(),
                     wait_signals: BTreeMap::new(),
                     used_nonces: BTreeMap::new(),
                     event_base_cursor: 0,
@@ -196,9 +198,11 @@ impl Daemon {
                             rustls::ServerConnection::new(config).map_err(|err| err.to_string());
                         if let Ok(connection) = connection {
                             let stream = rustls::StreamOwned::new(connection, stream);
-                            if let Err(err) =
-                                daemon.serve_tls_stream(stream, &server_id, ticket_secret.as_bytes())
-                            {
+                            if let Err(err) = daemon.serve_tls_stream(
+                                stream,
+                                &server_id,
+                                ticket_secret.as_bytes(),
+                            ) {
                                 debug_log(&format!("tls stream closed with error: {err}"));
                             }
                         } else if let Err(err) = connection {
@@ -1255,6 +1259,7 @@ impl Daemon {
             self.inner.state_cv.notify_all();
         }
         for pane in collect_panes(&session) {
+            self.tmux_close_pipe(&pane.pane_id);
             pane.close();
         }
         Ok(())
@@ -1349,17 +1354,23 @@ impl Daemon {
     }
 
     fn handle_pane_event(&self, event: PaneRuntimeEvent) {
+        let mut pipe_write: Option<(String, Arc<Mutex<std::process::ChildStdin>>, Vec<u8>)> = None;
         let mut state = self.inner.state.lock().unwrap();
         match event {
             PaneRuntimeEvent::Output {
                 session_id,
                 pane_id,
-                len,
-            } => self.emit_event_locked(
-                &mut state,
-                "pane.output",
-                json!({ "session_id": session_id, "pane_id": pane_id, "len": len }),
-            ),
+                data,
+            } => {
+                if let Some(pipe) = state.pane_pipes.get(&pane_id) {
+                    pipe_write = Some((pane_id.clone(), Arc::clone(pipe), data.clone()));
+                }
+                self.emit_event_locked(
+                    &mut state,
+                    "pane.output",
+                    json!({ "session_id": session_id, "pane_id": pane_id, "len": data.len() }),
+                )
+            }
             PaneRuntimeEvent::Busy {
                 session_id,
                 pane_id,
@@ -1379,13 +1390,31 @@ impl Daemon {
             PaneRuntimeEvent::Exit {
                 session_id,
                 pane_id,
-            } => self.emit_event_locked(
-                &mut state,
-                "exited",
-                json!({ "session_id": session_id, "pane_id": pane_id }),
-            ),
+            } => {
+                state.pane_pipes.remove(&pane_id);
+                self.emit_event_locked(
+                    &mut state,
+                    "exited",
+                    json!({ "session_id": session_id, "pane_id": pane_id }),
+                )
+            }
         }
         self.inner.state_cv.notify_all();
+        drop(state);
+
+        if let Some((pane_id, pipe, data)) = pipe_write {
+            let result = {
+                let mut stdin = pipe.lock().unwrap();
+                stdin
+                    .write_all(&data)
+                    .and_then(|_| stdin.flush())
+                    .map_err(|err| err.to_string())
+            };
+            if result.is_err() {
+                let mut state = self.inner.state.lock().unwrap();
+                state.pane_pipes.remove(&pane_id);
+            }
+        }
     }
 
     fn current_signal_generation(&self, name: &str) -> u64 {
@@ -1955,12 +1984,15 @@ impl Daemon {
                 let parsed =
                     parse_tmux_args(raw_args, &["-t", "-x", "-y"], &["-D", "-L", "-R", "-U"])?;
                 let target = self.tmux_resolve_pane(parsed.value("-t"))?;
-                let amount = parsed
+                let exact_cols = parsed
                     .value("-x")
-                    .or_else(|| parsed.value("-y"))
                     .and_then(|value| value.trim_end_matches('%').parse::<u16>().ok())
-                    .filter(|value| *value > 0)
-                    .unwrap_or(5);
+                    .filter(|value| *value > 0);
+                let exact_rows = parsed
+                    .value("-y")
+                    .and_then(|value| value.trim_end_matches('%').parse::<u16>().ok())
+                    .filter(|value| *value > 0);
+                let amount = exact_cols.or(exact_rows).unwrap_or(5);
                 let capture = target.handle.capture(false)?;
                 let mut cols = capture.capture.cols.max(2);
                 let mut rows = capture.capture.rows.max(1);
@@ -1972,6 +2004,13 @@ impl Daemon {
                     rows = rows.saturating_sub(amount).max(1);
                 } else if parsed.has_flag("-D") {
                     rows = rows.saturating_add(amount);
+                } else {
+                    if let Some(exact_cols) = exact_cols {
+                        cols = exact_cols.max(2);
+                    }
+                    if let Some(exact_rows) = exact_rows {
+                        rows = exact_rows.max(1);
+                    }
                 }
                 target.handle.resize(cols, rows)?;
                 Ok(tmux_result(
@@ -1997,9 +2036,12 @@ impl Daemon {
                         json!({ "name": name, "generation": generation }),
                     ))
                 } else {
-                    let after_generation = self.current_signal_generation(name);
-                    let generation =
-                        self.wait_for_signal(name, after_generation, Duration::from_secs(30))?;
+                    let current_generation = self.current_signal_generation(name);
+                    let generation = if current_generation > 0 {
+                        current_generation
+                    } else {
+                        self.wait_for_signal(name, 0, Duration::from_secs(30))?
+                    };
                     Ok(tmux_result(
                         String::new(),
                         json!({ "name": name, "generation": generation }),
@@ -2135,21 +2177,13 @@ impl Daemon {
                     return Err("pipe-pane requires a shell command".to_string());
                 }
                 let target = self.tmux_resolve_pane(parsed.value("-t"))?;
-                let capture = target.handle.capture(true)?;
-                let text = join_history(&capture.capture.history, &capture.capture.visible);
-                let shell = self.tmux_run_shell(&shell_command, &text)?;
-                if shell.0 != 0 {
-                    return Err(format!(
-                        "pipe-pane command failed ({}): {}",
-                        shell.0,
-                        shell.2.trim()
-                    ));
-                }
+                self.tmux_close_pipe(&target.pane_id);
+                self.tmux_open_pipe(&target.pane_id, &shell_command)?;
                 Ok(tmux_result(
-                    shell.1,
+                    String::new(),
                     json!({
-                        "status": shell.0,
-                        "stderr": shell.2,
+                        "pane_id": tmux_pane_display_id(&target.pane_id),
+                        "status": 0,
                     }),
                 ))
             }
@@ -2157,13 +2191,10 @@ impl Daemon {
                 let parsed = parse_tmux_args(raw_args, &["-t"], &[])?;
                 let query = parsed.positional().join(" ").trim().to_string();
                 let lines = self.tmux_find_windows(parsed.value("-t"), &query)?;
-                Ok(tmux_result(
-                    lines.join("\n"),
-                    json!({ "count": lines.len() }),
-                ))
+                Ok(tmux_result(String::new(), json!({ "count": lines.len() })))
             }
             "respawn-pane" => {
-                let parsed = parse_tmux_args(raw_args, &["-t"], &[])?;
+                let parsed = parse_tmux_args(raw_args, &["-t"], &["-k"])?;
                 let target = self.tmux_resolve_pane(parsed.value("-t"))?;
                 let command_text = if parsed.positional().is_empty() {
                     "exec ${SHELL:-/bin/sh} -l".to_string()
@@ -2582,13 +2613,18 @@ impl Daemon {
     }
 
     fn tmux_kill_window(&self, session: &Arc<Session>, window_index: usize) -> Result<(), String> {
-        let (handles, close_events) = {
+        let (handles, pane_ids, close_events) = {
             let mut inner = session.inner.lock().unwrap();
             if window_index >= inner.windows.len() {
                 return Err("window not found".to_string());
             }
             let window = inner.windows.remove(window_index);
             let window_id = window.id.clone();
+            let pane_ids = window
+                .panes
+                .iter()
+                .map(|pane| pane.pane_id.clone())
+                .collect::<Vec<_>>();
             let mut close_events = Vec::with_capacity(window.panes.len() + 1);
             for pane in &window.panes {
                 close_events.push((
@@ -2615,6 +2651,7 @@ impl Daemon {
                     .into_iter()
                     .map(|pane| pane.handle)
                     .collect::<Vec<_>>(),
+                pane_ids,
                 close_events,
             )
         };
@@ -2624,6 +2661,9 @@ impl Daemon {
                 self.emit_event_locked(&mut state, kind, payload);
             }
             self.inner.state_cv.notify_all();
+        }
+        for pane_id in pane_ids {
+            self.tmux_close_pipe(&pane_id);
         }
         for handle in handles {
             handle.close();
@@ -2669,6 +2709,7 @@ impl Daemon {
             );
             self.inner.state_cv.notify_all();
         }
+        self.tmux_close_pipe(&pane_id);
         handle.close();
         if empty_after_remove {
             self.tmux_kill_window(session, window_index)?;
@@ -2727,6 +2768,7 @@ impl Daemon {
         let pane_events: EventCallback =
             Arc::new(move |event| event_daemon.handle_pane_event(event));
         let handle = PaneHandle::spawn(&session.id, &pane_id, command, cols, rows, pane_events)?;
+        self.tmux_close_pipe(&pane_id);
         let old_handle = {
             let mut inner = session.inner.lock().unwrap();
             let window = inner
@@ -2784,30 +2826,33 @@ impl Daemon {
         Ok(lines)
     }
 
-    fn tmux_run_shell(
-        &self,
-        shell_command: &str,
-        stdin_text: &str,
-    ) -> Result<(i32, String, String), String> {
+    fn tmux_open_pipe(&self, pane_id: &str, shell_command: &str) -> Result<(), String> {
         let mut child = Command::new("/bin/sh")
             .arg("-lc")
             .arg(shell_command)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|err| err.to_string())?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(stdin_text.as_bytes())
-                .map_err(|err| err.to_string())?;
-        }
-        let output = child.wait_with_output().map_err(|err| err.to_string())?;
-        Ok((
-            output.status.code().unwrap_or(1),
-            String::from_utf8_lossy(&output.stdout).to_string(),
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ))
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "pipe-pane child missing stdin".to_string())?;
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+
+        let mut state = self.inner.state.lock().unwrap();
+        state
+            .pane_pipes
+            .insert(pane_id.to_string(), Arc::new(Mutex::new(stdin)));
+        Ok(())
+    }
+
+    fn tmux_close_pipe(&self, pane_id: &str) {
+        let mut state = self.inner.state.lock().unwrap();
+        state.pane_pipes.remove(pane_id);
     }
 
     fn tmux_window_id(
