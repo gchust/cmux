@@ -104,21 +104,22 @@ func containsAll(haystack string, needles ...string) bool {
 func readUntilContainsAll(t *testing.T, ptmx *os.File, timeout time.Duration, needles ...string) string {
 	t.Helper()
 
+	ensurePTYNonblocking(t, ptmx)
 	deadline := time.Now().Add(timeout)
 	var out strings.Builder
 	buf := make([]byte, 4096)
 	for time.Now().Before(deadline) {
-		_ = ptmx.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		n, err := ptmx.Read(buf)
+		n, err := readPTYChunk(ptmx, buf)
 		if n > 0 {
 			out.Write(buf[:n])
 			if containsAll(out.String(), needles...) {
 				return out.String()
 			}
 		}
-		if err != nil && n == 0 {
-			continue
+		if err != nil {
+			t.Fatalf("read pty: %v", err)
 		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	return out.String()

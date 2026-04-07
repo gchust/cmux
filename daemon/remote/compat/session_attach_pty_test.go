@@ -2,10 +2,12 @@ package compat
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -455,12 +457,12 @@ func writePTY(t *testing.T, ptmx *os.File, text string) {
 func readUntilContains(t *testing.T, ptmx *os.File, want string, timeout time.Duration) string {
 	t.Helper()
 
+	ensurePTYNonblocking(t, ptmx)
 	deadline := time.Now().Add(timeout)
 	var out strings.Builder
 	buf := make([]byte, 4096)
 	for time.Now().Before(deadline) {
-		_ = ptmx.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		n, err := ptmx.Read(buf)
+		n, err := readPTYChunk(ptmx, buf)
 		if n > 0 {
 			out.Write(buf[:n])
 			if strings.Contains(out.String(), want) {
@@ -468,13 +470,34 @@ func readUntilContains(t *testing.T, ptmx *os.File, want string, timeout time.Du
 			}
 		}
 		if err != nil {
-			if n == 0 {
-				continue
-			}
+			t.Fatalf("read pty: %v", err)
 		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	return out.String()
+}
+
+func ensurePTYNonblocking(t *testing.T, ptmx *os.File) {
+	t.Helper()
+	if err := syscall.SetNonblock(int(ptmx.Fd()), true); err != nil {
+		t.Fatalf("set pty nonblocking: %v", err)
+	}
+}
+
+func readPTYChunk(ptmx *os.File, buf []byte) (int, error) {
+	n, err := ptmx.Read(buf)
+	if err == nil {
+		return n, nil
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		err = pathErr.Err
+	}
+	if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
+		return n, nil
+	}
+	return n, err
 }
 
 func waitForSessionSize(t *testing.T, bin, socketPath, sessionID string, cols, rows int, timeout time.Duration) {

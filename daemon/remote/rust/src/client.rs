@@ -551,15 +551,20 @@ fn split_command_tail(args: &[String]) -> Option<String> {
 }
 
 fn current_size() -> (u16, u16) {
-    let mut size = libc::winsize {
-        ws_row: 24,
-        ws_col: 80,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    unsafe {
-        if libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut size) == 0 {
-            return (size.ws_col.max(2), size.ws_row.max(1));
+    for fd in [libc::STDOUT_FILENO, libc::STDIN_FILENO, libc::STDERR_FILENO] {
+        let mut size = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        unsafe {
+            if libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) == 0
+                && size.ws_col > 0
+                && size.ws_row > 0
+            {
+                return (size.ws_col.max(2), size.ws_row.max(1));
+            }
         }
     }
     (80, 24)
