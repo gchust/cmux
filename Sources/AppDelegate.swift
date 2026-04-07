@@ -2246,6 +2246,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private nonisolated static let minimumVisibleRestoredWindowHeight: CGFloat = 320
     private nonisolated static let defaultRestoredWindowSize = CGSize(width: 960, height: 720)
     private nonisolated static let defaultRestoredWindowMargin: CGFloat = 80
+    // Cap how many per-display-configuration window geometries we keep around
+    // in UserDefaults so users that frequently dock/undock or rotate through
+    // conference-room displays don't accumulate entries indefinitely.
+    nonisolated static let maxStoredDisplayConfigurations = 8
     private nonisolated static let mainWindowMinimumContentSize = NSSize(
         width: CGFloat(SessionPersistencePolicy.minimumWindowWidth),
         height: CGFloat(SessionPersistencePolicy.minimumWindowHeight)
@@ -3793,12 +3797,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         display: SessionDisplaySnapshot?,
         defaults: UserDefaults = .standard
     ) {
-        Self.removeLegacyPersistedWindowGeometry(defaults: defaults)
-        let existingDisplayConfigurations = persistedWindowGeometry(defaults: defaults)?.displayConfigurations
+        guard let frame else { return }
+        // Snapshot the current display fingerprint on the main actor while
+        // NSScreen is safe to read, then dispatch the read-merge-encode-write
+        // onto sessionPersistenceQueue so it serializes with saveSessionSnapshot's
+        // background writes (avoids the lost-update race where two writers each
+        // read the old displayConfigurations map and clobber the other's entry).
         let displayConfigurationFingerprint = Self.displayConfigurationFingerprint(
             for: currentDisplayGeometries().available
         )
-        guard let data = Self.encodedPersistedWindowGeometryData(
+        sessionPersistenceQueue.async {
+            Self.writePersistedWindowGeometry(
+                frame: frame,
+                display: display,
+                displayConfigurationFingerprint: displayConfigurationFingerprint,
+                defaults: defaults
+            )
+        }
+    }
+
+    /// Read-merge-encode-write of the per-display window geometry payload.
+    /// Always called on `sessionPersistenceQueue` so reads and writes against
+    /// the `displayConfigurations` map are serialized.
+    nonisolated static func writePersistedWindowGeometry(
+        frame: SessionRectSnapshot,
+        display: SessionDisplaySnapshot?,
+        displayConfigurationFingerprint: String?,
+        defaults: UserDefaults = .standard
+    ) {
+        removeLegacyPersistedWindowGeometry(defaults: defaults)
+        let existingDisplayConfigurations = defaults
+            .data(forKey: persistedWindowGeometryDefaultsKey)
+            .flatMap { decodedPersistedWindowGeometryData($0) }?
+            .displayConfigurations
+        guard let data = encodedPersistedWindowGeometryData(
             frame: frame,
             display: display,
             displayConfigurationFingerprint: displayConfigurationFingerprint,
@@ -3806,7 +3838,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         ) else {
             return
         }
-        defaults.set(data, forKey: Self.persistedWindowGeometryDefaultsKey)
+        defaults.set(data, forKey: persistedWindowGeometryDefaultsKey)
     }
 
     private nonisolated static func encodedPersistedWindowGeometryData(
@@ -3816,20 +3848,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         existingDisplayConfigurations: [String: PersistedWindowGeometry.StoredGeometry]? = nil
     ) -> Data? {
         guard let frame else { return nil }
-        var displayConfigurations = existingDisplayConfigurations ?? [:]
-        if let displayConfigurationFingerprint, !displayConfigurationFingerprint.isEmpty {
-            displayConfigurations[displayConfigurationFingerprint] = PersistedWindowGeometry.StoredGeometry(
-                frame: frame,
-                display: display
-            )
-        }
+        let displayConfigurations = mergedDisplayConfigurations(
+            existing: existingDisplayConfigurations,
+            fingerprint: displayConfigurationFingerprint,
+            frame: frame,
+            display: display
+        )
         let payload = PersistedWindowGeometry(
             version: persistedWindowGeometrySchemaVersion,
             frame: frame,
             display: display,
-            displayConfigurations: displayConfigurations.isEmpty ? nil : displayConfigurations
+            displayConfigurations: displayConfigurations
         )
         return try? JSONEncoder().encode(payload)
+    }
+
+    /// Merge a freshly-captured per-display-configuration entry into the
+    /// existing map and evict the oldest extras when we exceed the LRU cap.
+    /// The `fingerprint` entry (if any) is always preserved as the most
+    /// recent — only other entries are eligible for eviction.
+    nonisolated static func mergedDisplayConfigurations(
+        existing: [String: PersistedWindowGeometry.StoredGeometry]?,
+        fingerprint: String?,
+        frame: SessionRectSnapshot,
+        display: SessionDisplaySnapshot?
+    ) -> [String: PersistedWindowGeometry.StoredGeometry]? {
+        var merged = existing ?? [:]
+        if let fingerprint, !fingerprint.isEmpty {
+            merged[fingerprint] = PersistedWindowGeometry.StoredGeometry(
+                frame: frame,
+                display: display
+            )
+        }
+        while merged.count > maxStoredDisplayConfigurations {
+            // Evict any entry other than the just-written fingerprint. We
+            // don't track true LRU order, so picking an arbitrary stale key
+            // is acceptable for an eight-slot bound.
+            let evictionKey = merged.keys.first { $0 != fingerprint }
+            if let evictionKey {
+                merged.removeValue(forKey: evictionKey)
+            } else {
+                break
+            }
+        }
+        return merged.isEmpty ? nil : merged
     }
 
     nonisolated static func decodedPersistedWindowGeometryData(_ data: Data) -> PersistedWindowGeometry? {
@@ -3872,6 +3934,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             availableDisplays: displays.available,
             matchingOnly: true
         )
+        var didReconcilePrimary = false
 
         for context in mainWindowContexts.values {
             guard let window = resolvedWindow(for: context),
@@ -3897,6 +3960,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }()
 
             guard let resolvedFrame else { continue }
+
+            // Mark the primary window as reconciled whenever we computed a
+            // valid frame for it (even if no setFrame was needed). This is
+            // intentional: it means the primary's current frame is already
+            // usable on the new display set, and persisting it for the new
+            // fingerprint is desired. We do NOT mark it reconciled when the
+            // primary is miniaturized/fullscreen above (that path skips this
+            // loop entirely), so we won't persist a stale off-screen frame.
+            if window === primaryWindow {
+                didReconcilePrimary = true
+            }
+
             guard !Self.rectApproximatelyEqual(window.frame, resolvedFrame) else { continue }
 
             applyValidatedMainWindowFrame(resolvedFrame, to: window, display: true)
@@ -3908,7 +3983,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
         }
 
-        if let primaryWindow {
+        // Only persist if the primary window passed the reconcile guard (not
+        // miniaturized/fullscreen). Persisting a miniaturized window's frame
+        // here would write the pre-miniaturization frame from the *old*
+        // display into the *new* display-config entry, recreating the sliver
+        // bug on next launch.
+        if didReconcilePrimary, let primaryWindow {
             persistWindowGeometry(from: primaryWindow)
         }
     }
@@ -4384,7 +4464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return bestOverlap.display
     }
 
-    private nonisolated static func hasSufficientVisibleFrame(
+    nonisolated static func hasSufficientVisibleFrame(
         _ frame: CGRect,
         in displays: [SessionDisplayGeometry],
         minWidth: CGFloat,
@@ -4392,22 +4472,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         minimumVisibleWidth: CGFloat,
         minimumVisibleHeight: CGFloat
     ) -> Bool {
-        guard let visibleBounds = visibleIntersectionBounds(for: frame, in: displays) else {
-            return false
-        }
+        // A frame is "sufficiently visible" only if at least one individual
+        // display contains an intersection meeting the minimum visible
+        // width/height. Checking per-display (rather than the union of
+        // intersections) is important for two reasons:
+        //  - Disjoint slivers on two displays would otherwise produce a wide
+        //    bounding box that falsely passed the union check, even though
+        //    neither display had enough of the window to be reachable.
+        //  - Legitimately spanning windows still pass: at least one display
+        //    has a meaningful chunk of the window above the threshold.
         let requiredWidth = min(minimumVisibleWidth, max(frame.width, minWidth))
         let requiredHeight = min(minimumVisibleHeight, max(frame.height, minHeight))
-        return visibleBounds.width >= requiredWidth && visibleBounds.height >= requiredHeight
-    }
-
-    private nonisolated static func visibleIntersectionBounds(
-        for frame: CGRect,
-        in displays: [SessionDisplayGeometry]
-    ) -> CGRect? {
-        displays.reduce(nil) { partialResult, display in
+        return displays.contains { display in
             let intersection = frame.intersection(display.visibleFrame)
-            guard !intersection.isNull else { return partialResult }
-            return partialResult?.union(intersection) ?? intersection
+            guard !intersection.isNull else { return false }
+            return intersection.width >= requiredWidth && intersection.height >= requiredHeight
         }
     }
 
@@ -4803,22 +4882,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             persistSessionSnapshot(
                 nil,
                 removeWhenEmpty: removeWhenEmpty,
-                persistedGeometryData: nil,
+                pendingGeometryWrite: nil,
                 synchronously: writeSynchronously
             )
             return false
         }
 
-        let persistedDisplayConfigurations = persistedWindowGeometry()?.displayConfigurations
+        // Capture only the inputs to the geometry write here on the main actor
+        // (NSScreen reads). The actual read-merge-encode-write of the
+        // displayConfigurations map happens later inside persistSessionSnapshot's
+        // writeBlock on sessionPersistenceQueue, so it serializes with
+        // persistWindowGeometry's writes and avoids lost updates.
         let persistedGeometryFingerprint = Self.displayConfigurationFingerprint(
             for: currentDisplayGeometries().available
         )
-        let persistedGeometryData = snapshot.windows.first.flatMap { primaryWindow in
-            Self.encodedPersistedWindowGeometryData(
-                frame: primaryWindow.frame,
+        let pendingGeometryWrite: PendingGeometryWrite? = snapshot.windows.first.flatMap { primaryWindow in
+            guard let frame = primaryWindow.frame else { return nil }
+            return PendingGeometryWrite(
+                frame: frame,
                 display: primaryWindow.display,
-                displayConfigurationFingerprint: persistedGeometryFingerprint,
-                existingDisplayConfigurations: persistedDisplayConfigurations
+                displayConfigurationFingerprint: persistedGeometryFingerprint
             )
         }
 
@@ -4828,10 +4911,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         persistSessionSnapshot(
             snapshot,
             removeWhenEmpty: false,
-            persistedGeometryData: persistedGeometryData,
+            pendingGeometryWrite: pendingGeometryWrite,
             synchronously: writeSynchronously
         )
         return true
+    }
+
+    /// Inputs to a deferred per-display window geometry write. Captured on
+    /// the main actor and merged into UserDefaults later, on
+    /// `sessionPersistenceQueue`, so the read-merge-encode happens at write
+    /// time and never races with concurrent writers.
+    struct PendingGeometryWrite: Sendable {
+        let frame: SessionRectSnapshot
+        let display: SessionDisplaySnapshot?
+        let displayConfigurationFingerprint: String?
     }
 
     nonisolated static func shouldPersistSnapshotOnWindowUnregister(isTerminatingApp: Bool) -> Bool {
@@ -5013,18 +5106,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func persistSessionSnapshot(
         _ snapshot: AppSessionSnapshot?,
         removeWhenEmpty: Bool,
-        persistedGeometryData: Data?,
+        pendingGeometryWrite: PendingGeometryWrite?,
         synchronously: Bool
     ) {
-        guard snapshot != nil || removeWhenEmpty || persistedGeometryData != nil else { return }
+        guard snapshot != nil || removeWhenEmpty || pendingGeometryWrite != nil else { return }
 
         let writeBlock = {
-            Self.removeLegacyPersistedWindowGeometry()
-            if let persistedGeometryData {
-                UserDefaults.standard.set(
-                    persistedGeometryData,
-                    forKey: Self.persistedWindowGeometryDefaultsKey
+            if let pendingGeometryWrite {
+                // Read existing displayConfigurations from UserDefaults *here*,
+                // inside the queue, then merge and write back. Doing the
+                // read-merge-encode at write time prevents the lost-update
+                // race with persistWindowGeometry's queue writes.
+                Self.writePersistedWindowGeometry(
+                    frame: pendingGeometryWrite.frame,
+                    display: pendingGeometryWrite.display,
+                    displayConfigurationFingerprint: pendingGeometryWrite.displayConfigurationFingerprint
                 )
+            } else {
+                Self.removeLegacyPersistedWindowGeometry()
             }
             if let snapshot {
                 _ = SessionPersistenceStore.save(snapshot)
