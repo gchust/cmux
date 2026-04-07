@@ -77,7 +77,7 @@ func TestSessionAttachTUIResizeAndReattach(t *testing.T) {
 
 	second := exec.Command(bin, "session", "attach", "tui-attach", "--socket", socketPath)
 	second.Dir = daemonRemoteRoot()
-	ptmx2, err := pty.Start(second)
+	ptmx2, err := pty.StartWithSize(second, &pty.Winsize{Cols: 91, Rows: 31})
 	if err != nil {
 		t.Fatalf("pty start reattach: %v", err)
 	}
