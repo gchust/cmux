@@ -319,8 +319,18 @@ enum KeyboardShortcutSettings {
 
     private static func systemWideHotkeyConflicts(with shortcut: StoredShortcut) -> Bool {
         guard let registration = shortcut.carbonHotKeyRegistration else { return false }
+        let keyCode = UInt16(registration.keyCode)
+        let modifierFlags = shortcut.modifierFlags
+        // Validate against the keystroke AppKit shortcuts would see for the
+        // registered Carbon hotkey under the current input source.
+        let eventCharacter = KeyboardLayout.character(forKeyCode: keyCode)
+
         return reservedSystemWideHotkeyShortcuts().contains { reserved in
-            reserved.carbonHotKeyRegistration == registration
+            reserved.matches(
+                keyCode: keyCode,
+                modifierFlags: modifierFlags,
+                eventCharacter: eventCharacter
+            )
         }
     }
 
@@ -359,6 +369,8 @@ enum KeyboardShortcutSettings {
         StoredShortcut(key: "d", command: true, shift: false, option: false, control: false),
         StoredShortcut(key: "\t", command: false, shift: false, option: false, control: true),
         StoredShortcut(key: "\t", command: false, shift: true, option: false, control: true),
+        StoredShortcut(key: "`", command: true, shift: false, option: false, control: false),
+        StoredShortcut(key: "`", command: true, shift: true, option: false, control: false),
     ]
 
     static func shortcut(for action: Action) -> StoredShortcut {
