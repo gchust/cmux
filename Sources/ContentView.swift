@@ -13173,9 +13173,14 @@ private struct TabItemView: View, Equatable {
     @ViewBuilder
     private var workspaceContextMenu: some View {
         let targetIds = contextMenuWorkspaceIds
+        let targetWorkspaces = targetIds.compactMap { workspaceId in
+            tabManager.tabs.first(where: { $0.id == workspaceId })
+        }
         let isMulti = targetIds.count > 1
         let tabColorPalette = WorkspaceTabColorSettings.palette()
         let shouldPin = !tab.isPinned
+        let allGitMetadataWatcherDisabled = !targetWorkspaces.isEmpty
+            && targetWorkspaces.allSatisfy(\.gitMetadataWatcherDisabled)
         let reconnectLabel = contextMenuLabel(
             multi: String(localized: "contextMenu.reconnectWorkspaces", defaultValue: "Reconnect Workspaces"),
             single: String(localized: "contextMenu.reconnectWorkspace", defaultValue: "Reconnect Workspace"),
@@ -13255,6 +13260,18 @@ private struct TabItemView: View, Equatable {
                     tabManager.clearCustomDescription(tabId: tab.id)
                 }
             }
+        }
+
+        Button(
+            allGitMetadataWatcherDisabled
+                ? String(localized: "contextMenu.enableGitMetadataWatcher", defaultValue: "Enable Git Metadata Watcher")
+                : String(localized: "contextMenu.disableGitMetadataWatcher", defaultValue: "Disable Git Metadata Watcher")
+        ) {
+            tabManager.setWorkspaceGitMetadataWatcherDisabled(
+                workspaceIds: targetIds,
+                disabled: !allGitMetadataWatcherDisabled
+            )
+            syncSelectionAfterMutation()
         }
 
         if !remoteContextMenuWorkspaceIds.isEmpty {

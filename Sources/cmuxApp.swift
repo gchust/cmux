@@ -4113,6 +4113,8 @@ struct SettingsView: View {
     @AppStorage("sidebarSelectionColorHex") private var sidebarSelectionColorHex: String?
     @AppStorage("sidebarNotificationBadgeColorHex") private var sidebarNotificationBadgeColorHex: String?
     @AppStorage("sidebarShowBranchDirectory") private var sidebarShowBranchDirectory = true
+    @AppStorage(GitMetadataWatcherSettings.disabledKey)
+    private var sidebarDisableGitMetadataWatcher = GitMetadataWatcherSettings.defaultDisabled
     @AppStorage("sidebarShowPullRequest") private var sidebarShowPullRequest = true
     @AppStorage(BrowserLinkOpenSettings.openSidebarPullRequestLinksInCmuxBrowserKey)
     private var openSidebarPullRequestLinksInCmuxBrowser = BrowserLinkOpenSettings.defaultOpenSidebarPullRequestLinksInCmuxBrowser
@@ -5047,6 +5049,20 @@ struct SettingsView: View {
                                 .controlSize(.small)
                         }
                         .disabled(sidebarHideAllDetails)
+
+                        SettingsCardDivider()
+
+                        SettingsCardRow(
+                            configurationReview: .json("sidebar.disableGitMetadataWatcher"),
+                            String(localized: "settings.app.disableGitMetadataWatcher", defaultValue: "Disable Git Metadata Watcher"),
+                            subtitle: sidebarDisableGitMetadataWatcher
+                                ? String(localized: "settings.app.disableGitMetadataWatcher.subtitleOn", defaultValue: "Stop the background repo watcher and PR refresher for sidebar git metadata.")
+                                : String(localized: "settings.app.disableGitMetadataWatcher.subtitleOff", defaultValue: "Use FSEvents to refresh branch, dirty-state, and PR metadata only when repo files change.")
+                        ) {
+                            Toggle("", isOn: $sidebarDisableGitMetadataWatcher)
+                                .labelsHidden()
+                                .controlSize(.small)
+                        }
 
                         SettingsCardDivider()
 
@@ -6156,6 +6172,7 @@ struct SettingsView: View {
         sidebarSelectionColorHex = nil
         sidebarNotificationBadgeColorHex = nil
         sidebarShowBranchDirectory = true
+        sidebarDisableGitMetadataWatcher = GitMetadataWatcherSettings.defaultDisabled
         sidebarShowPullRequest = true
         openSidebarPullRequestLinksInCmuxBrowser = BrowserLinkOpenSettings.defaultOpenSidebarPullRequestLinksInCmuxBrowser
         openSidebarPortLinksInCmuxBrowser = BrowserLinkOpenSettings.defaultOpenSidebarPortLinksInCmuxBrowser

@@ -653,6 +653,127 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
         XCTAssertEqual(workspace.sidebarGitBranchesInDisplayOrder().map(\.branch), ["main"])
     }
 
+    func testWorkspaceGitMetadataSummaryHonorsCmuxIgnoreOptOut() throws {
+        let fileManager = FileManager.default
+        let repoURL = fileManager.temporaryDirectory.appendingPathComponent(
+            "cmux-git-ignore-optout-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: repoURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: repoURL) }
+
+        try runGit(["init", "-b", "main"], in: repoURL)
+        try runGit(["config", "user.name", "cmux tests"], in: repoURL)
+        try runGit(["config", "user.email", "cmux@example.invalid"], in: repoURL)
+        try "seed\n".write(
+            to: repoURL.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "README.md"], in: repoURL)
+        try runGit(["commit", "-m", "Initial commit"], in: repoURL)
+        try "changed\n".write(
+            to: repoURL.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "".write(
+            to: repoURL.appendingPathComponent(".cmuxignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let summary = TabManager.workspaceGitMetadataSummaryForTesting(directory: repoURL.path)
+        XCTAssertEqual(summary.branch, "main")
+        XCTAssertNil(summary.isDirty)
+        XCTAssertTrue(summary.isWatcherOptedOut)
+        XCTAssertFalse(fileManager.fileExists(atPath: repoURL.appendingPathComponent(".git/index.lock").path))
+    }
+
+    func testWorkspaceGitMetadataSummaryHonorsGitConfigOptOut() throws {
+        let fileManager = FileManager.default
+        let repoURL = fileManager.temporaryDirectory.appendingPathComponent(
+            "cmux-git-config-optout-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: repoURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: repoURL) }
+
+        try runGit(["init", "-b", "main"], in: repoURL)
+        try runGit(["config", "user.name", "cmux tests"], in: repoURL)
+        try runGit(["config", "user.email", "cmux@example.invalid"], in: repoURL)
+        try "seed\n".write(
+            to: repoURL.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "README.md"], in: repoURL)
+        try runGit(["commit", "-m", "Initial commit"], in: repoURL)
+        try runGit(["config", "cmux.metadataWatcher", "false"], in: repoURL)
+        try "changed\n".write(
+            to: repoURL.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let summary = TabManager.workspaceGitMetadataSummaryForTesting(directory: repoURL.path)
+        XCTAssertEqual(summary.branch, "main")
+        XCTAssertNil(summary.isDirty)
+        XCTAssertTrue(summary.isWatcherOptedOut)
+        XCTAssertFalse(fileManager.fileExists(atPath: repoURL.appendingPathComponent(".git/index.lock").path))
+    }
+
+    func testWorkspaceGitMetadataSummaryReadsDirtyRepoWithoutCreatingIndexLock() throws {
+        let fileManager = FileManager.default
+        let repoURL = fileManager.temporaryDirectory.appendingPathComponent(
+            "cmux-git-no-lock-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: repoURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: repoURL) }
+
+        try runGit(["init", "-b", "main"], in: repoURL)
+        try runGit(["config", "user.name", "cmux tests"], in: repoURL)
+        try runGit(["config", "user.email", "cmux@example.invalid"], in: repoURL)
+        try "seed\n".write(
+            to: repoURL.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "README.md"], in: repoURL)
+        try runGit(["commit", "-m", "Initial commit"], in: repoURL)
+        try "changed\n".write(
+            to: repoURL.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let summary = TabManager.workspaceGitMetadataSummaryForTesting(directory: repoURL.path)
+        XCTAssertEqual(summary.branch, "main")
+        XCTAssertEqual(summary.isDirty, true)
+        XCTAssertFalse(summary.isWatcherOptedOut)
+        XCTAssertFalse(fileManager.fileExists(atPath: repoURL.appendingPathComponent(".git/index.lock").path))
+    }
+
+    func testGitHubRepositorySlugsForTestingReadsGitConfigRemotes() throws {
+        let fileManager = FileManager.default
+        let repoURL = fileManager.temporaryDirectory.appendingPathComponent(
+            "cmux-git-config-remotes-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: repoURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: repoURL) }
+
+        try runGit(["init", "-b", "main"], in: repoURL)
+        try runGit(["remote", "add", "origin", "https://github.com/manaflow-ai/cmux.git"], in: repoURL)
+        try runGit(["remote", "add", "upstream", "git@github.com:ghostty-org/ghostty.git"], in: repoURL)
+
+        XCTAssertEqual(
+            TabManager.githubRepositorySlugsForTesting(directory: repoURL.path),
+            ["ghostty-org/ghostty", "manaflow-ai/cmux"]
+        )
+    }
+
     func testRemoteSplitSkipsInitialGitMetadataProbe() throws {
         let manager = TabManager()
         guard let workspace = manager.selectedWorkspace,
