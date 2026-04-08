@@ -594,7 +594,20 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
             }
         }
         #endif
-        data.withUnsafeBytes { buffer in
+        // The daemon normalizes line endings (\r\n → \n) in its read buffer.
+        // Ghostty's VT parser needs \r\n, so restore the carriage returns.
+        let restored: Data
+        if data.contains(0x0a) {
+            var out = Data(capacity: data.count + data.count / 10)
+            for byte in data {
+                if byte == 0x0a { out.append(0x0d) }
+                out.append(byte)
+            }
+            restored = out
+        } else {
+            restored = data
+        }
+        restored.withUnsafeBytes { buffer in
             guard let baseAddress = buffer.baseAddress else { return }
             let pointer = baseAddress.assumingMemoryBound(to: CChar.self)
             ghostty_surface_process_output(surface, pointer, UInt(buffer.count))
