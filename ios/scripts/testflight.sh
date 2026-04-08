@@ -26,7 +26,7 @@ xcodebuild -scheme cmux -configuration Nightly \
   -quiet
 
 # Try to attach Sentry dSYM if available
-SENTRY_BINARY="build/cmux.xcarchive/Products/Applications/cmux NIGHTLY.app/Frameworks/Sentry.framework/Sentry"
+SENTRY_BINARY="build/cmux.xcarchive/Products/Applications/cmux.app/Frameworks/Sentry.framework/Sentry"
 if [ -f "$SENTRY_BINARY" ]; then
   SENTRY_UUID=$(dwarfdump --uuid "$SENTRY_BINARY" | awk '{print $2}' | head -1)
   if [ -n "$SENTRY_UUID" ]; then
