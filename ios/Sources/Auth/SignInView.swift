@@ -318,14 +318,28 @@ struct SignInView: View {
             switch stackError.code {
             case "SCHEMA_ERROR":
                 return String(localized: "auth.error.invalid_email", defaultValue: "Please enter a valid email address.")
-            case "EMAIL_ALREADY_EXISTS":
+            case "USER_EMAIL_ALREADY_EXISTS":
                 return String(localized: "auth.error.email_exists", defaultValue: "An account with this email already exists. Try signing in instead.")
-            case "INVALID_OTP":
+            case "VERIFICATION_CODE_ERROR", "INVALID_OTP":
                 return String(localized: "auth.error.invalid_code", defaultValue: "Invalid code. Please check and try again.")
             case "OTP_EXPIRED":
                 return String(localized: "auth.error.code_expired", defaultValue: "Code expired. Please request a new one.")
             case "RATE_LIMIT":
                 return String(localized: "auth.error.rate_limit", defaultValue: "Too many attempts. Please wait a moment and try again.")
+            case "EMAIL_PASSWORD_MISMATCH":
+                return String(localized: "auth.error.wrong_password", defaultValue: "Incorrect email or password.")
+            case "USER_NOT_FOUND":
+                return String(localized: "auth.error.user_not_found", defaultValue: "No account found with this email.")
+            case "PASSKEY_AUTHENTICATION_FAILED", "PASSKEY_WEBAUTHN_ERROR":
+                return String(localized: "auth.error.passkey_failed", defaultValue: "Passkey authentication failed. Please try again.")
+            case "INVALID_TOTP_CODE":
+                return String(localized: "auth.error.invalid_mfa", defaultValue: "Incorrect verification code. Please try again.")
+            case "REDIRECT_URL_NOT_WHITELISTED":
+                return String(localized: "auth.error.config", defaultValue: "Sign in is temporarily unavailable. Please try again later.")
+            case "OAUTH_PROVIDER_ACCOUNT_ID_ALREADY_USED_FOR_SIGN_IN":
+                return String(localized: "auth.error.oauth_linked", defaultValue: "This account is already linked to another sign-in method.")
+            case "oauth_cancelled":
+                return ""
             default:
                 break
             }
