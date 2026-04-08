@@ -163,19 +163,57 @@ final class TailscaleServerDiscovery: TerminalServerDiscovering {
         }()
 
         var debugHosts: [TerminalHost] = []
-        for port in [9444, 9101, 9111, 9121, 10391] {
+        var seenPorts: Set<Int> = []
+
+        // Check for embedded port from tagged build
+        if let bundlePath = Bundle.main.path(forResource: "debug-ws-port", ofType: nil),
+           let portStr = try? String(contentsOfFile: bundlePath, encoding: .utf8)
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+           let port = Int(portStr) {
+            seenPorts.insert(port)
             debugHosts.append(TerminalHost(
                 stableID: "localhost-\(port)",
                 name: "Local Dev (:\(port))",
-                hostname: "127.0.0.1",
-                port: 22,
-                username: "cmux",
-                symbolName: "desktopcomputer",
-                palette: .sky,
-                source: .discovered,
-                transportPreference: .remoteDaemon,
-                wsPort: port,
-                wsSecret: hostSecret
+                hostname: "127.0.0.1", port: 22, username: "cmux",
+                symbolName: "desktopcomputer", palette: .sky,
+                source: .discovered, transportPreference: .remoteDaemon,
+                wsPort: port, wsSecret: hostSecret
+            ))
+        }
+
+        #if targetEnvironment(simulator)
+        // On simulator, scan /tmp for wsport discovery files from tagged macOS builds
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: "/tmp") {
+            for file in files where file.hasPrefix("cmux-debug-") && file.hasSuffix(".wsport") {
+                let fullPath = "/tmp/\(file)"
+                if let portStr = try? String(contentsOfFile: fullPath, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   let port = Int(portStr),
+                   !seenPorts.contains(port) {
+                    seenPorts.insert(port)
+                    let tag = String(file.dropFirst("cmux-debug-".count).dropLast(".wsport".count))
+                    debugHosts.append(TerminalHost(
+                        stableID: "localhost-\(port)",
+                        name: tag.isEmpty ? "Local Dev (:\(port))" : "Dev \(tag) (:\(port))",
+                        hostname: "127.0.0.1", port: 22, username: "cmux",
+                        symbolName: "desktopcomputer", palette: .sky,
+                        source: .discovered, transportPreference: .remoteDaemon,
+                        wsPort: port, wsSecret: hostSecret
+                    ))
+                }
+            }
+        }
+        #endif
+
+        // Fallback: probe well-known ports
+        for port in [9444, 9101, 9111, 9121, 10391] where !seenPorts.contains(port) {
+            debugHosts.append(TerminalHost(
+                stableID: "localhost-\(port)",
+                name: "Local Dev (:\(port))",
+                hostname: "127.0.0.1", port: 22, username: "cmux",
+                symbolName: "desktopcomputer", palette: .sky,
+                source: .discovered, transportPreference: .remoteDaemon,
+                wsPort: port, wsSecret: hostSecret
             ))
         }
         self.init(existingHosts: debugHosts)

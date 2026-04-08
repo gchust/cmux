@@ -28,6 +28,26 @@ if [ -n "$TAG" ]; then
     DERIVED_DATA_PATH="$HOME/Library/Developer/Xcode/DerivedData/cmux-$TAG"
 fi
 
+# Tagged build identity
+BUNDLE_ID="dev.cmux.app.dev"
+APP_NAME="cmux DEV"
+if [ -n "$TAG" ]; then
+    SANITIZED_TAG=$(echo "$TAG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/./g; s/^\.+//; s/\.+$//; s/\.+/./g')
+    BUNDLE_ID="dev.cmux.app.dev.${SANITIZED_TAG}"
+    APP_NAME="cmux DEV ${TAG}"
+fi
+
+# Discover wsPort from macOS daemon's .wsport file
+WS_PORT=""
+if [ -n "$TAG" ]; then
+    TAG_SLUG=$(echo "$TAG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')
+    WSPORT_FILE="/tmp/cmux-debug-${TAG_SLUG}.wsport"
+    if [ -f "$WSPORT_FILE" ]; then
+        WS_PORT=$(cat "$WSPORT_FILE")
+        echo "🔗 Found macOS daemon wsPort: $WS_PORT (from $WSPORT_FILE)"
+    fi
+fi
+
 LOCAL_CONFIG_SOURCE="$PROJECT_DIR/ios/Sources/Config/LocalConfig.plist"
 
 source "$SCRIPT_DIR/common.sh"
@@ -97,12 +117,23 @@ xcodegen generate
 
 # Build for simulator
 echo "🖥️  Building for simulator..."
+EXTRA_SETTINGS=()
+if [ "$BUNDLE_ID" != "dev.cmux.app.dev" ]; then
+    EXTRA_SETTINGS+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID")
+fi
 xcodebuild -scheme cmux -sdk iphonesimulator -configuration Debug \
     -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
     -derivedDataPath "$DERIVED_DATA_PATH" \
+    "${EXTRA_SETTINGS[@]}" \
     -quiet
 
-copy_local_config_if_present "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/cmux DEV.app" "$LOCAL_CONFIG_SOURCE"
+SIM_APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/cmux DEV.app"
+copy_local_config_if_present "$SIM_APP_PATH" "$LOCAL_CONFIG_SOURCE"
+
+# Embed wsPort if discovered
+if [ -n "$WS_PORT" ] && [ -d "$SIM_APP_PATH" ]; then
+    printf '%s' "$WS_PORT" > "$SIM_APP_PATH/debug-ws-port"
+fi
 
 echo "📲 Installing on simulator(s)..."
 # Install and launch on ALL booted simulators
@@ -111,8 +142,8 @@ if [ -n "$BOOTED_SIMS" ]; then
     for SIM_ID in $BOOTED_SIMS; do
         SIM_NAME=$(xcrun simctl list devices | grep "$SIM_ID" | sed 's/ (.*//')
         echo "  → $SIM_NAME"
-        xcrun simctl install "$SIM_ID" "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/cmux DEV.app" 2>/dev/null || true
-        xcrun simctl launch "$SIM_ID" dev.cmux.app.dev 2>/dev/null || true
+        xcrun simctl install "$SIM_ID" "$SIM_APP_PATH" 2>/dev/null || true
+        xcrun simctl launch "$SIM_ID" "$BUNDLE_ID" 2>/dev/null || true
     done
 else
     echo "  ⚠️  No booted simulators found"
@@ -137,19 +168,26 @@ if [ -n "$DEVICE_ID" ]; then
     xcodebuild -scheme cmux -configuration Debug \
         -destination "id=$DEVICE_ID" \
         -derivedDataPath "$DERIVED_DATA_PATH" \
+        "${EXTRA_SETTINGS[@]}" \
         -allowProvisioningUpdates \
         -allowProvisioningDeviceRegistration \
         -quiet
 
-    copy_local_config_if_present "$DERIVED_DATA_PATH/Build/Products/Debug-iphoneos/cmux DEV.app" "$LOCAL_CONFIG_SOURCE"
-    rewrite_localhost_for_device "$DERIVED_DATA_PATH/Build/Products/Debug-iphoneos/cmux DEV.app/LocalConfig.plist"
-    embed_debug_relay_for_device "$DERIVED_DATA_PATH/Build/Products/Debug-iphoneos/cmux DEV.app"
+    DEVICE_APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug-iphoneos/cmux DEV.app"
+    copy_local_config_if_present "$DEVICE_APP_PATH" "$LOCAL_CONFIG_SOURCE"
+    rewrite_localhost_for_device "$DEVICE_APP_PATH/LocalConfig.plist"
+    embed_debug_relay_for_device "$DEVICE_APP_PATH"
+
+    # Embed wsPort if discovered
+    if [ -n "$WS_PORT" ] && [ -d "$DEVICE_APP_PATH" ]; then
+        printf '%s' "$WS_PORT" > "$DEVICE_APP_PATH/debug-ws-port"
+    fi
 
     echo "📲 Installing on device..."
-    xcrun devicectl device install app --device "$DEVICE_ID" "$DERIVED_DATA_PATH/Build/Products/Debug-iphoneos/cmux DEV.app"
+    xcrun devicectl device install app --device "$DEVICE_ID" "$DEVICE_APP_PATH"
 
     echo "🚀 Launching on device..."
-    if ! xcrun devicectl device process launch --device "$DEVICE_ID" dev.cmux.app.dev; then
+    if ! xcrun devicectl device process launch --device "$DEVICE_ID" "$BUNDLE_ID"; then
         echo "⚠️  Could not launch app. If the device is locked, unlock it and open cmux manually."
     fi
 else

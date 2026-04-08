@@ -1151,7 +1151,16 @@ final class TerminalSidebarStore: ObservableObject {
     private func applyDebugWebSocketConfig(_ host: inout TerminalHost) {
         #if DEBUG
         guard host.wsPort == nil else { return }
-        host.wsPort = 9444
+
+        // Check for embedded port from tagged build, fall back to 9444
+        if let bundlePath = Bundle.main.path(forResource: "debug-ws-port", ofType: nil),
+           let portStr = try? String(contentsOfFile: bundlePath, encoding: .utf8)
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+           let port = Int(portStr) {
+            host.wsPort = port
+        } else {
+            host.wsPort = 9444
+        }
 
         // Load ws-secret: simulator reads from Mac filesystem, device reads from app bundle
         var secret: String?

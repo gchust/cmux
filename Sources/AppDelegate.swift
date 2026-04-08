@@ -2513,6 +2513,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
 
 #if DEBUG
+        MobileDaemonBridge.shared.startIfNeeded()
+#endif
+
+#if DEBUG
         // UI tests run on a shared VM user profile, so persisted shortcuts can drift and make
         // key-equivalent routing flaky. Force defaults for deterministic tests.
         if isRunningUnderXCTest {
@@ -2957,6 +2961,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         isTerminatingApp = true
+        #if DEBUG
+        MobileDaemonBridge.shared.stop()
+        #endif
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
         stopSessionAutosaveTimer()
         mobilePresenceCoordinator.stop()
