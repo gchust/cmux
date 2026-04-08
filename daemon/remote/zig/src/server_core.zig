@@ -266,7 +266,14 @@ fn handleSessionHistory(service: *session_service.Service, req: *const json_rpc.
     const params = getParamsObject(req) orelse return invalidParams(service.alloc, req.id, "session.history requires params");
     const session_id = getRequiredStringParam(params, "session_id", "session.history requires session_id") catch |err| return paramError(service.alloc, req.id, err);
 
-    const history = service.history(session_id, .plain) catch |err| switch (err) {
+    const format: serialize.HistoryFormat = blk: {
+        const fmt_str = getOptionalStringParam(params, "format") orelse break :blk .plain;
+        if (std.mem.eql(u8, fmt_str, "vt")) break :blk .vt;
+        if (std.mem.eql(u8, fmt_str, "html")) break :blk .html;
+        break :blk .plain;
+    };
+
+    const history = service.history(session_id, format) catch |err| switch (err) {
         error.TerminalSessionNotFound => return terminalNotFound(service.alloc, req.id),
         else => return internalError(service.alloc, req.id, err),
     };

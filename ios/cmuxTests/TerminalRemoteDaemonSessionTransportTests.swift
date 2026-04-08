@@ -386,6 +386,10 @@ private actor StubDaemonSessionClient: TerminalRemoteDaemonSessionClient {
         closedSessionValues.append(sessionID)
     }
 
+    func sessionHistory(sessionID: String, format: String) async throws -> TerminalRemoteDaemonSessionHistoryResult {
+        TerminalRemoteDaemonSessionHistoryResult(sessionID: sessionID, history: "")
+    }
+
     func openedCommands() -> [String] {
         openedCommandValues
     }

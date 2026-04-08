@@ -120,6 +120,66 @@ struct TerminalRemoteDaemonTerminalReadResult: Decodable, Equatable, Sendable {
     }
 }
 
+struct TerminalRemoteDaemonWorkspaceEntry: Decodable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let directory: String
+    let focusedPaneID: String?
+    let paneCount: Int
+    let createdAt: Int64
+    let lastActivityAt: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case directory
+        case focusedPaneID = "focused_pane_id"
+        case paneCount = "pane_count"
+        case createdAt = "created_at"
+        case lastActivityAt = "last_activity_at"
+    }
+}
+
+struct TerminalRemoteDaemonWorkspaceListResult: Decodable, Equatable, Sendable {
+    let workspaces: [TerminalRemoteDaemonWorkspaceEntry]
+    let selectedWorkspaceID: String?
+    let changeSeq: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case workspaces
+        case selectedWorkspaceID = "selected_workspace_id"
+        case changeSeq = "change_seq"
+    }
+}
+
+struct TerminalRemoteDaemonSessionListEntry: Decodable, Equatable, Sendable {
+    let sessionID: String
+    let attachmentCount: Int
+    let effectiveCols: Int
+    let effectiveRows: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case attachmentCount = "attachment_count"
+        case effectiveCols = "effective_cols"
+        case effectiveRows = "effective_rows"
+    }
+}
+
+struct TerminalRemoteDaemonSessionListResult: Decodable, Equatable, Sendable {
+    let sessions: [TerminalRemoteDaemonSessionListEntry]
+}
+
+struct TerminalRemoteDaemonSessionHistoryResult: Decodable, Equatable, Sendable {
+    let sessionID: String
+    let history: String
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case history
+    }
+}
+
 enum TerminalRemoteDaemonClientError: LocalizedError, Equatable {
     case invalidJSON(String)
     case missingResult
@@ -229,6 +289,26 @@ actor TerminalRemoteDaemonClient {
             method: "session.close",
             params: ["session_id": sessionID],
             as: TerminalRemoteDaemonCloseResult.self
+        )
+    }
+
+    func workspaceList() async throws -> TerminalRemoteDaemonWorkspaceListResult {
+        try await sendRequest(method: "workspace.list", params: [:], as: TerminalRemoteDaemonWorkspaceListResult.self)
+    }
+
+    func workspaceSubscribe() async throws -> TerminalRemoteDaemonWorkspaceListResult {
+        try await sendRequest(method: "workspace.subscribe", params: [:], as: TerminalRemoteDaemonWorkspaceListResult.self)
+    }
+
+    func sessionList() async throws -> TerminalRemoteDaemonSessionListResult {
+        try await sendRequest(method: "session.list", params: [:], as: TerminalRemoteDaemonSessionListResult.self)
+    }
+
+    func sessionHistory(sessionID: String, format: String = "plain") async throws -> TerminalRemoteDaemonSessionHistoryResult {
+        try await sendRequest(
+            method: "session.history",
+            params: ["session_id": sessionID, "format": format],
+            as: TerminalRemoteDaemonSessionHistoryResult.self
         )
     }
 

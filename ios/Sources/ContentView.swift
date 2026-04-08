@@ -23,6 +23,18 @@ struct ContentView: View {
     private let uiTestTerminalDirectFixture = UITestConfig.terminalDirectFixtureEnabled
     private let uiTestTerminalDiscoveredFixture = UITestConfig.terminalDiscoveredFixtureEnabled
 
+    private static let hasMobileWsSecret: Bool = {
+        #if DEBUG
+        let home = ProcessInfo.processInfo.environment["SIMULATOR_HOST_HOME"]
+            ?? ProcessInfo.processInfo.environment["HOME"]
+            ?? NSHomeDirectory()
+        let path = "\(home)/Library/Application Support/cmux/mobile-ws-secret"
+        return FileManager.default.fileExists(atPath: path)
+        #else
+        return false
+        #endif
+    }()
+
     var body: some View {
         Group {
             if uiTestChatView {
@@ -64,6 +76,11 @@ struct ContentView: View {
                 #else
                 SignInView()
                 #endif
+            } else if Self.hasMobileWsSecret {
+                TerminalSidebarRootView(
+                    store: terminalStore,
+                    routeStore: notificationRouteStore
+                )
             } else if authManager.isRestoringSession {
                 SessionRestoreView()
             } else if authManager.isAuthenticated {

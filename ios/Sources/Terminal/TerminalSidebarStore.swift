@@ -186,8 +186,8 @@ final class TerminalSidebarStore: ObservableObject {
         self.snapshotStore = snapshotStore
         self.credentialsStore = credentialsStore
         self.transportFactory = transportFactory
-        self.workspaceIdentityService = workspaceIdentityService ?? TerminalConvexWorkspaceIdentityService()
-        self.workspaceMetadataService = workspaceMetadataService ?? TerminalConvexWorkspaceMetadataService()
+        self.workspaceIdentityService = workspaceIdentityService
+        self.workspaceMetadataService = workspaceMetadataService
         self.serverDiscovery = serverDiscovery
         self.networkPathMonitor = networkPathMonitor
         self.remoteWorkspaceReadMarker = remoteWorkspaceReadMarker ?? LiveTerminalRemoteWorkspaceReadMarker()
@@ -1695,8 +1695,18 @@ final class TerminalSessionController: ObservableObject {
             terminalSurface = surface
             surfaceView = surface as? GhosttySurfaceView
             observeSurfaceClose(for: surface)
+            // Marker: surface created successfully
+            if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+                let info = "ensureTerminalSurface OK at \(Date())\nsurfaceView=\(surfaceView != nil)\nghostty_surface=\(surfaceView?.surface != nil)\n"
+                try? info.write(to: caches.appendingPathComponent("ensure-surface-marker.txt"), atomically: true, encoding: .utf8)
+            }
             return true
         } catch {
+            // Marker: surface creation failed
+            if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+                let info = "ensureTerminalSurface FAILED at \(Date())\nerror=\(error)\n"
+                try? info.write(to: caches.appendingPathComponent("ensure-surface-error.txt"), atomically: true, encoding: .utf8)
+            }
             clearTerminalSurface()
             setPhase(.failed, error: error.localizedDescription)
             return false

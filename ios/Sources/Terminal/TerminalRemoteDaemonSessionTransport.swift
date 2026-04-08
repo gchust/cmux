@@ -31,6 +31,7 @@ protocol TerminalRemoteDaemonSessionClient: Sendable {
         attachmentID: String
     ) async throws -> TerminalRemoteDaemonSessionStatus
     func sessionClose(sessionID: String) async throws
+    func sessionHistory(sessionID: String, format: String) async throws -> TerminalRemoteDaemonSessionHistoryResult
 }
 
 enum TerminalRemoteDaemonSessionTransportError: LocalizedError {

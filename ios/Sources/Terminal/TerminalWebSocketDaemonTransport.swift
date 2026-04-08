@@ -200,7 +200,7 @@ final class TerminalWebSocketTransport: @unchecked Sendable, TerminalTransport {
         // WebSocket connects to the daemon which manages its own PTY sessions.
         // Request a login shell. The daemon runs on the Mac, so /bin/zsh -l
         // gives the user their normal shell environment.
-        let command = "/bin/zsh -l"
+        let command = "TERM=xterm-256color COLORTERM=truecolor /bin/zsh -l"
         // WebSocket always connects to the local Mac daemon, so we know the platform.
         eventHandler?(.remotePlatform(RemotePlatform(goOS: "darwin", goArch: "arm64")))
 
