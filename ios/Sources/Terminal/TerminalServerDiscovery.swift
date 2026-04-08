@@ -219,10 +219,14 @@ final class TailscaleServerDiscovery: TerminalServerDiscovering {
         self.init(existingHosts: debugHosts)
         #else
         // Load persisted hosts from GRDB snapshot store for production discovery
-        let store = TerminalCacheRepository(database: AppDatabase.live())
-        let snapshot = store.load()
-        let savedHosts = snapshot.hosts.filter { $0.wsPort != nil }
-        self.init(existingHosts: savedHosts)
+        do {
+            let store = try TerminalCacheRepository(database: AppDatabase.live())
+            let snapshot = store.load()
+            let savedHosts = snapshot.hosts.filter { $0.wsPort != nil }
+            self.init(existingHosts: savedHosts)
+        } catch {
+            self.init(existingHosts: [])
+        }
         #endif
     }
 

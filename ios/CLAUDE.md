@@ -4,8 +4,8 @@
 | Config | Bundle ID | App Name | Signing |
 |--------|-----------|----------|---------|
 | Debug | `dev.cmux.app.dev` | cmux DEV | Automatic |
-| Beta | `dev.cmux.app.beta` | cmux Beta | Manual |
-| Release | `dev.cmux.app` | cmux | Manual |
+| Nightly | `com.cmuxterm.app.nightly` | cmux NIGHTLY | Automatic |
+| Release | `com.cmuxterm.app` | cmux | Manual |
 
 ## Development
 ```bash

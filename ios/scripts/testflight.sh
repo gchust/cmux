@@ -19,12 +19,14 @@ xcodegen generate
 
 # Archive
 echo "📦 Archiving..."
-xcodebuild -scheme cmux -configuration Beta \
+xcodebuild -scheme cmux -configuration Nightly \
   -archivePath build/cmux.xcarchive archive \
+  -allowProvisioningUpdates \
+  -allowProvisioningDeviceRegistration \
   -quiet
 
 # Try to attach Sentry dSYM if available
-SENTRY_BINARY="build/cmux.xcarchive/Products/Applications/cmux Beta.app/Frameworks/Sentry.framework/Sentry"
+SENTRY_BINARY="build/cmux.xcarchive/Products/Applications/cmux NIGHTLY.app/Frameworks/Sentry.framework/Sentry"
 if [ -f "$SENTRY_BINARY" ]; then
   SENTRY_UUID=$(dwarfdump --uuid "$SENTRY_BINARY" | awk '{print $2}' | head -1)
   if [ -n "$SENTRY_UUID" ]; then
@@ -78,6 +80,8 @@ cat <<'EOF' > "$EXPORT_PLIST"
   <key>teamID</key>
   <string>7WLXT3NR37</string>
   <key>uploadSymbols</key>
+  <true/>
+  <key>manageAppVersionAndPlatform</key>
   <true/>
 </dict>
 </plist>
