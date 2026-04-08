@@ -10,8 +10,8 @@ enum AuthError: Error, LocalizedError {
         switch self {
         case .networkError:
             return "Network error. Please check your connection."
-        case .serverError(let code, let message):
-            return "Server error (\(code)): \(message)"
+        case .serverError:
+            return "Something went wrong. Please try again."
         case .invalidCode:
             return "Invalid code. Please try again."
         case .unauthorized:

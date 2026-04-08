@@ -313,31 +313,38 @@ struct SignInView: View {
     }
 
     private func detailedErrorMessage(_ error: Error) -> String {
-        var lines: [String] = []
-
-        let localized = error.localizedDescription
-        if !localized.isEmpty {
-            lines.append(localized)
-        }
-
-        lines.append("Type: \(String(reflecting: type(of: error)))")
-
+        // Show user-friendly messages in release builds
         if let stackError = error as? StackAuthErrorProtocol {
-            lines.append("Code: \(stackError.code)")
-            lines.append("Message: \(stackError.message)")
-            if let details = stackError.details {
-                lines.append("Details: \(details)")
+            switch stackError.code {
+            case "SCHEMA_ERROR":
+                return String(localized: "auth.error.invalid_email", defaultValue: "Please enter a valid email address.")
+            case "EMAIL_ALREADY_EXISTS":
+                return String(localized: "auth.error.email_exists", defaultValue: "An account with this email already exists. Try signing in instead.")
+            case "INVALID_OTP":
+                return String(localized: "auth.error.invalid_code", defaultValue: "Invalid code. Please check and try again.")
+            case "OTP_EXPIRED":
+                return String(localized: "auth.error.code_expired", defaultValue: "Code expired. Please request a new one.")
+            case "RATE_LIMIT":
+                return String(localized: "auth.error.rate_limit", defaultValue: "Too many attempts. Please wait a moment and try again.")
+            default:
+                break
             }
         }
 
-        let nsError = error as NSError
-        lines.append("NSError domain: \(nsError.domain)")
-        lines.append("NSError code: \(nsError.code)")
-        if !nsError.userInfo.isEmpty {
-            lines.append("UserInfo: \(nsError.userInfo)")
+        if let authError = error as? AuthError {
+            return authError.localizedDescription
         }
 
-        return lines.joined(separator: "\n")
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            return String(localized: "auth.error.network", defaultValue: "Could not connect to the server. Check your internet connection and try again.")
+        }
+
+        #if DEBUG
+        return "\(error.localizedDescription)\n\(String(reflecting: type(of: error)))"
+        #else
+        return String(localized: "auth.error.generic", defaultValue: "Something went wrong. Please try again.")
+        #endif
     }
 
     private func dismissKeyboard() {
