@@ -8,7 +8,6 @@ import Darwin
 import Network
 import CoreText
 
-<<<<<<< HEAD
 func cmuxCurrentProcessEnvironment() -> [String: String] {
     var environment: [String: String] = [:]
     var cursor = environ
@@ -61,7 +60,8 @@ func cmuxCurrentBundleIdentifier(environment: [String: String] = cmuxCurrentProc
     }
     let bundleIdentifier = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
     return bundleIdentifier?.isEmpty == false ? bundleIdentifier : nil
-=======
+}
+
 #if DEBUG
 private func debugWorkspaceDescriptionPreview(_ text: String?, limit: Int = 120) -> String {
     guard let text else { return "nil" }
@@ -109,7 +109,6 @@ struct CmuxSurfaceConfigTemplate {
         }
         waitAfterCommand = cConfig.wait_after_command
     }
->>>>>>> origin/main
 }
 
 func cmuxSurfaceContextName(_ context: ghostty_surface_context_e) -> String {
@@ -5302,7 +5301,6 @@ final class WorkspaceRemoteSessionController {
         }
     }
 
-<<<<<<< HEAD
     static func localRemoteDaemonBuildPlan(
         repoRoot: URL,
         goOS: String,
@@ -5397,7 +5395,10 @@ final class WorkspaceRemoteSessionController {
         case ("linux", "amd64"):
             return "x86_64-linux-gnu"
         default:
-=======
+            return nil
+        }
+    }
+
     private static func captureCommandStandardOutput(
         executablePath: String,
         arguments: [String]
@@ -5421,14 +5422,8 @@ final class WorkspaceRemoteSessionController {
             return output
         } catch {
             // Best effort cleanup only.
->>>>>>> origin/main
             return nil
         }
-    }
-
-<<<<<<< HEAD
-    private static func which(_ executable: String) -> String? {
-        which(executable, environment: cmuxCurrentProcessEnvironment(), fileManager: .default)
     }
 
     static func which(
@@ -5440,7 +5435,12 @@ final class WorkspaceRemoteSessionController {
         for component in path.split(separator: ":") {
             let candidate = String(component) + "/" + executable
             if fileManager.isExecutableFile(atPath: candidate) {
-=======
+                return candidate
+            }
+        }
+        return nil
+    }
+
     private static func parsePSLine(_ line: Substring) -> (pid: Int, ppid: Int, command: String)? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -5585,7 +5585,6 @@ final class WorkspaceRemoteSessionController {
         for component in executableSearchPaths() {
             let candidate = (component as NSString).appendingPathComponent(executable)
             if FileManager.default.isExecutableFile(atPath: candidate) {
->>>>>>> origin/main
                 return candidate
             }
         }
@@ -6344,12 +6343,6 @@ enum SidebarPullRequestStatus: String {
     case closed
 }
 
-enum SidebarPullRequestChecksStatus: String {
-    case pass
-    case fail
-    case pending
-}
-
 private func normalizedSidebarBranchName(_ branch: String?) -> String? {
     guard let branch else { return nil }
     let trimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -6362,7 +6355,7 @@ struct SidebarPullRequestState: Equatable {
     let url: URL
     let status: SidebarPullRequestStatus
     let branch: String?
-    let checks: SidebarPullRequestChecksStatus?
+    let isStale: Bool
 
     init(
         number: Int,
@@ -6370,14 +6363,14 @@ struct SidebarPullRequestState: Equatable {
         url: URL,
         status: SidebarPullRequestStatus,
         branch: String? = nil,
-        checks: SidebarPullRequestChecksStatus? = nil
+        isStale: Bool = false
     ) {
         self.number = number
         self.label = label
         self.url = url
         self.status = status
         self.branch = normalizedSidebarBranchName(branch)
-        self.checks = checks
+        self.isStale = isStale
     }
 }
 
@@ -6622,13 +6615,8 @@ enum SidebarBranchOrdering {
             }
         }
 
-        func checksPriority(_ checks: SidebarPullRequestChecksStatus?) -> Int {
-            switch checks {
-            case .fail: return 3
-            case .pending: return 2
-            case .pass: return 1
-            case nil: return 0
-            }
+        func freshnessPriority(_ isStale: Bool) -> Int {
+            isStale ? 0 : 1
         }
 
         func normalizedReviewURLKey(for url: URL) -> String {
@@ -6665,10 +6653,10 @@ enum SidebarBranchOrdering {
                 continue
             }
             guard let existing = pullRequestsByKey[key] else { continue }
-            if statusPriority(state.status) > statusPriority(existing.status) {
+            if freshnessPriority(state.isStale) > freshnessPriority(existing.isStale) {
                 pullRequestsByKey[key] = state
-            } else if state.status == existing.status,
-                      checksPriority(state.checks) > checksPriority(existing.checks) {
+            } else if freshnessPriority(state.isStale) == freshnessPriority(existing.isStale),
+                      statusPriority(state.status) > statusPriority(existing.status) {
                 pullRequestsByKey[key] = state
             }
         }
@@ -8388,7 +8376,7 @@ final class Workspace: Identifiable, ObservableObject {
         url: URL,
         status: SidebarPullRequestStatus,
         branch: String? = nil,
-        checks: SidebarPullRequestChecksStatus? = nil
+        isStale: Bool = false
     ) {
         let existing = panelPullRequests[panelId]
         let normalizedBranch = normalizedSidebarBranchName(branch)
@@ -8409,26 +8397,13 @@ final class Workspace: Identifiable, ObservableObject {
             }
             return existing.branch
         }()
-        let resolvedChecks: SidebarPullRequestChecksStatus? = {
-            if let checks {
-                return checks
-            }
-            guard let existing,
-                  existing.number == number,
-                  existing.label == label,
-                  existing.url == url,
-                  existing.status == status else {
-                return nil
-            }
-            return existing.checks
-        }()
         let state = SidebarPullRequestState(
             number: number,
             label: label,
             url: url,
             status: status,
             branch: resolvedBranch,
-            checks: resolvedChecks
+            isStale: isStale
         )
         if existing != state {
             panelPullRequests[panelId] = state
@@ -10031,6 +10006,12 @@ final class Workspace: Identifiable, ObservableObject {
     /// Called before the workspace is removed from TabManager to ensure child
     /// processes receive SIGHUP even if ARC deallocation is delayed.
     func teardownAllPanels() {
+        // Hide portal-hosted content up front so a workspace being torn down
+        // cannot keep drawing above the next selected/restored workspace while
+        // panel close work is still unwinding.
+        hideAllTerminalPortalViews()
+        hideAllBrowserPortalViews()
+
         let panelEntries = Array(panels)
         for (panelId, panel) in panelEntries {
             panelSubscriptions.removeValue(forKey: panelId)
