@@ -163,6 +163,7 @@ final class GhosttyRuntime {
 
     private static func applyiOSDefaults(_ config: ghostty_config_t) {
         let monokai = """
+        font-family = Menlo
         font-size = 10
         cursor-style = bar
         cursor-style-blink = true
@@ -212,6 +213,7 @@ final class GhosttyRuntime {
         guard !FileManager.default.fileExists(atPath: configFile.path) else { return }
 
         let defaultConfig = """
+        font-family = Menlo
         font-size = 10
         cursor-style = bar
         cursor-style-blink = true
