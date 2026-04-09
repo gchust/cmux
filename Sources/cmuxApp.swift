@@ -3933,6 +3933,30 @@ enum ClaudeCodeIntegrationSettings {
     }
 }
 
+enum CursorIntegrationSettings {
+    static let hooksEnabledKey = "cursorHooksEnabled"
+    static let defaultHooksEnabled = true
+
+    static func hooksEnabled(defaults: UserDefaults = .standard) -> Bool {
+        if defaults.object(forKey: hooksEnabledKey) == nil {
+            return defaultHooksEnabled
+        }
+        return defaults.bool(forKey: hooksEnabledKey)
+    }
+}
+
+enum GeminiIntegrationSettings {
+    static let hooksEnabledKey = "geminiHooksEnabled"
+    static let defaultHooksEnabled = true
+
+    static func hooksEnabled(defaults: UserDefaults = .standard) -> Bool {
+        if defaults.object(forKey: hooksEnabledKey) == nil {
+            return defaultHooksEnabled
+        }
+        return defaults.bool(forKey: hooksEnabledKey)
+    }
+}
+
 enum WelcomeSettings {
     static let shownKey = "cmuxWelcomeShown"
 }
@@ -4179,6 +4203,10 @@ struct SettingsView: View {
     private var claudeCodeHooksEnabled = ClaudeCodeIntegrationSettings.defaultHooksEnabled
     @AppStorage(ClaudeCodeIntegrationSettings.customClaudePathKey)
     private var customClaudePath = ""
+    @AppStorage(CursorIntegrationSettings.hooksEnabledKey)
+    private var cursorHooksEnabled = CursorIntegrationSettings.defaultHooksEnabled
+    @AppStorage(GeminiIntegrationSettings.hooksEnabledKey)
+    private var geminiHooksEnabled = GeminiIntegrationSettings.defaultHooksEnabled
     @AppStorage(TelemetrySettings.sendAnonymousTelemetryKey)
     private var sendAnonymousTelemetry = TelemetrySettings.defaultSendAnonymousTelemetry
     @AppStorage(PreferredEditorSettings.key) private var preferredEditorCommand = ""
@@ -5616,6 +5644,44 @@ struct SettingsView: View {
                     }
 
                     SettingsCard {
+                        SettingsCardRow(
+                            configurationReview: .json("automation.cursorIntegration"),
+                            String(localized: "settings.automation.cursor", defaultValue: "Cursor Integration"),
+                            subtitle: cursorHooksEnabled
+                                ? String(localized: "settings.automation.cursor.subtitleOn", defaultValue: "Sidebar shows Cursor agent status and notifications.")
+                                : String(localized: "settings.automation.cursor.subtitleOff", defaultValue: "Cursor runs without cmux integration.")
+                        ) {
+                            Toggle("", isOn: $cursorHooksEnabled)
+                                .labelsHidden()
+                                .controlSize(.small)
+                                .accessibilityIdentifier("SettingsCursorHooksToggle")
+                        }
+
+                        SettingsCardDivider()
+
+                        SettingsCardNote(String(localized: "settings.automation.cursor.note", defaultValue: "Hooks must be installed with `cmux cursor install-hooks`. They no-op outside cmux terminals."))
+                    }
+
+                    SettingsCard {
+                        SettingsCardRow(
+                            configurationReview: .json("automation.geminiIntegration"),
+                            String(localized: "settings.automation.gemini", defaultValue: "Gemini CLI Integration"),
+                            subtitle: geminiHooksEnabled
+                                ? String(localized: "settings.automation.gemini.subtitleOn", defaultValue: "Sidebar shows Gemini session status and notifications.")
+                                : String(localized: "settings.automation.gemini.subtitleOff", defaultValue: "Gemini runs without cmux integration.")
+                        ) {
+                            Toggle("", isOn: $geminiHooksEnabled)
+                                .labelsHidden()
+                                .controlSize(.small)
+                                .accessibilityIdentifier("SettingsGeminiHooksToggle")
+                        }
+
+                        SettingsCardDivider()
+
+                        SettingsCardNote(String(localized: "settings.automation.gemini.note", defaultValue: "Hooks must be installed with `cmux gemini install-hooks`. They no-op outside cmux terminals."))
+                    }
+
+                    SettingsCard {
                         SettingsCardRow(configurationReview: .json("automation.portBase"), String(localized: "settings.automation.portBase", defaultValue: "Port Base"), subtitle: String(localized: "settings.automation.portBase.subtitle", defaultValue: "Starting port for CMUX_PORT env var."), controlWidth: pickerColumnWidth) {
                             TextField("", value: $cmuxPortBase, format: .number)
                                 .textFieldStyle(.roundedBorder)
@@ -5945,6 +6011,8 @@ struct SettingsView: View {
                         }
                     }
 
+                    GlobalHotkeySection()
+
                     SettingsSectionHeader(title: String(localized: "settings.section.keyboardShortcuts", defaultValue: "Keyboard Shortcuts"))
                         .id(SettingsNavigationTarget.keyboardShortcuts)
                         .accessibilityIdentifier("SettingsKeyboardShortcutsSection")
@@ -5984,7 +6052,9 @@ struct SettingsView: View {
 
                         SettingsCardDivider()
 
-                        let actions = KeyboardShortcutSettings.Action.allCases
+                        let actions = KeyboardShortcutSettings.Action.allCases.filter {
+                            $0 != SystemWideHotkeySettings.action
+                        }
                         ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
                             ShortcutSettingRow(action: action)
                                 .padding(.horizontal, 14)
@@ -6221,6 +6291,8 @@ struct SettingsView: View {
         socketControlMode = SocketControlSettings.defaultMode.rawValue
         claudeCodeHooksEnabled = ClaudeCodeIntegrationSettings.defaultHooksEnabled
         customClaudePath = ""
+        cursorHooksEnabled = CursorIntegrationSettings.defaultHooksEnabled
+        geminiHooksEnabled = GeminiIntegrationSettings.defaultHooksEnabled
         sendAnonymousTelemetry = TelemetrySettings.defaultSendAnonymousTelemetry
         preferredEditorCommand = ""
         browserSearchEngine = BrowserSearchSettings.defaultSearchEngine.rawValue
@@ -6288,6 +6360,7 @@ struct SettingsView: View {
         socketPasswordStatusMessage = nil
         socketPasswordStatusIsError = false
         refreshDetectedImportBrowsers()
+        SystemWideHotkeySettings.reset()
         KeyboardShortcutSettings.resetAll()
         WorkspaceTabColorSettings.reset()
         reloadWorkspaceTabColorSettings()
@@ -6924,6 +6997,85 @@ private struct ShortcutSettingRow: View {
                     shortcut = latest
                 }
             }
+    }
+}
+
+private struct GlobalHotkeySection: View {
+    @AppStorage(SystemWideHotkeySettings.enabledKey) private var isEnabled = SystemWideHotkeySettings.defaultEnabled
+    @State private var shortcut = KeyboardShortcutSettings.shortcut(for: SystemWideHotkeySettings.action)
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { isEnabled },
+            set: { newValue in
+                isEnabled = newValue
+            }
+        )
+    }
+
+    private var enableSubtitle: String {
+        if isEnabled {
+            return String(
+                localized: "settings.globalHotkey.enable.subtitleOn",
+                defaultValue: "Press the shortcut from any app to show or hide all cmux windows."
+            )
+        }
+        return String(
+            localized: "settings.globalHotkey.enable.subtitleOff",
+            defaultValue: "Turn this on to show or hide all cmux windows from any app."
+        )
+    }
+
+    var body: some View {
+        SettingsSectionHeader(title: String(localized: "settings.section.globalHotkey", defaultValue: "Global Hotkey"))
+            .accessibilityIdentifier("SettingsGlobalHotkeySection")
+
+        SettingsCard {
+            SettingsCardRow(
+                configurationReview: .settingsOnly,
+                String(localized: "settings.globalHotkey.enable", defaultValue: "Enable System-Wide Hotkey"),
+                subtitle: enableSubtitle
+            ) {
+                Toggle("", isOn: enabledBinding)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .accessibilityIdentifier("SettingsGlobalHotkeyToggle")
+            }
+
+            SettingsCardDivider()
+
+            KeyboardShortcutRecorder(
+                label: String(localized: "settings.globalHotkey.shortcut", defaultValue: "Show/Hide All Windows"),
+                subtitle: KeyboardShortcutSettings.settingsFileManagedSubtitle(for: SystemWideHotkeySettings.action),
+                shortcut: $shortcut,
+                transformRecordedShortcut: { SystemWideHotkeySettings.action.normalizedRecordedShortcut($0) },
+                isDisabled: KeyboardShortcutSettings.isManagedBySettingsFile(SystemWideHotkeySettings.action)
+            )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .accessibilityIdentifier("SettingsGlobalHotkeyRecorder")
+        }
+        .onChange(of: shortcut) { newValue in
+            KeyboardShortcutSettings.setShortcut(newValue, for: SystemWideHotkeySettings.action)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: KeyboardShortcutSettings.didChangeNotification)) { _ in
+            syncFromDefaults()
+        }
+
+        SettingsCardNote(
+            String(
+                localized: "settings.globalHotkey.note",
+                defaultValue: "Use Command, Option, or Control with another key. No extra macOS permission is required."
+            )
+        )
+            .accessibilityIdentifier("SettingsGlobalHotkeyNote")
+    }
+
+    private func syncFromDefaults() {
+        let latestShortcut = KeyboardShortcutSettings.shortcut(for: SystemWideHotkeySettings.action)
+        if latestShortcut != shortcut {
+            shortcut = latestShortcut
+        }
     }
 }
 
