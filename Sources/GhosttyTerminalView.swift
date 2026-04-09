@@ -11749,11 +11749,14 @@ extension GhosttyNSView: NSServicesMenuRequestor {
         guard let string = GhosttyPasteboardHelper.stringContents(from: pboard) else { return false }
         guard !string.isEmpty else { return true }
 
-        withExternalCommittedText {
-            insertText(string, replacementRange: NSRange(location: NSNotFound, length: 0))
+        // Services can return multiline payloads. Route them through the text/paste path
+        // so Ghostty handles them as pasted text instead of synthesizing Return/Tab keys.
+        if let terminalSurface {
+            terminalSurface.sendText(string)
+            return true
         }
 
-        return true
+        return false
     }
 }
 

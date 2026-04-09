@@ -6868,10 +6868,13 @@ final class Workspace: Identifiable, ObservableObject {
             : FileManager.default.homeDirectoryForCurrentUser.path
 
         // Configure bonsplit with keepAllAlive to preserve terminal state
-        // and keep split entry instantaneous.
+        // and keep split entry instantaneous. Use the cached Ghostty config so
+        // new workspaces inherit tab-strip sizing before the first onAppear refresh.
+        let initialSurfaceTabBarFontSize = GhosttyConfig.load().surfaceTabBarFontSize
         let appearance = Self.bonsplitAppearance(
             from: GhosttyApp.shared.defaultBackgroundColor,
-            backgroundOpacity: GhosttyApp.shared.defaultBackgroundOpacity
+            backgroundOpacity: GhosttyApp.shared.defaultBackgroundOpacity,
+            tabTitleFontSize: initialSurfaceTabBarFontSize
         )
         let config = BonsplitConfiguration(
             allowSplits: true,
