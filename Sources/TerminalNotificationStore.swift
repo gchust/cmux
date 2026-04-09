@@ -847,13 +847,13 @@ final class TerminalNotificationStore: ObservableObject {
             )
 
             nonisolated(unsafe) let safeContent = content
-            self.center.add(request) { error in
-                MainActor.assumeIsolated {
+            self.center.add(request) { [weak self] error in
+                DispatchQueue.main.async {
                     if let error {
                         NSLog("Failed to schedule test notification: \(error)")
-                        self.logAuthorization("settings test schedule failed error=\(error.localizedDescription)")
+                        self?.logAuthorization("settings test schedule failed error=\(error.localizedDescription)")
                     } else {
-                        self.logAuthorization("settings test schedule succeeded")
+                        self?.logAuthorization("settings test schedule succeeded")
                         NotificationSoundSettings.runCustomCommand(
                             title: safeContent.title,
                             subtitle: safeContent.subtitle,

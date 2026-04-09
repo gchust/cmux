@@ -7796,7 +7796,7 @@ enum BrowserImportPlanResolver {
     @MainActor
     static func realize(
         plan: BrowserImportExecutionPlan,
-        profileStore: BrowserProfileStore = MainActor.assumeIsolated { .shared }
+        profileStore: BrowserProfileStore = .shared
     ) throws -> RealizedBrowserImportExecutionPlan {
         var realizedEntries: [RealizedBrowserImportExecutionEntry] = []
         var createdProfiles: [BrowserProfileDefinition] = []
