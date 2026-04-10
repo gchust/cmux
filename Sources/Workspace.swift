@@ -356,7 +356,14 @@ extension Workspace {
             )
         }
         progress = snapshot.progress.map { SidebarProgressState(value: $0.value, label: $0.label) }
-        gitBranch = snapshot.gitBranch.map { SidebarGitBranchState(branch: $0.branch, isDirty: $0.isDirty) }
+        if gitMetadataWatcherDisabled {
+            gitBranch = nil
+            panelGitBranches.removeAll()
+            pullRequest = nil
+            panelPullRequests.removeAll()
+        } else {
+            gitBranch = snapshot.gitBranch.map { SidebarGitBranchState(branch: $0.branch, isDirty: $0.isDirty) }
+        }
 
         recomputeListeningPorts()
 

@@ -1792,6 +1792,12 @@ func installFileDropOverlay(on window: NSWindow, tabManager: TabManager) {
 }
 
 struct ContentView: View {
+    enum WorkspaceGitMetadataWatcherContextMenuMode: Equatable {
+        case hidden
+        case enable
+        case disable
+    }
+
     @ObservedObject var updateViewModel: UpdateViewModel
     let windowId: UUID
     @EnvironmentObject var tabManager: TabManager
@@ -2331,6 +2337,21 @@ struct ContentView: View {
             return CGFloat(SessionPersistencePolicy.defaultSidebarWidth)
         }
         return max(minimumWidth, min(sanitizedMaximumWidth, candidate))
+    }
+
+    static func workspaceGitMetadataWatcherContextMenuMode(
+        targetWorkspaces: [Workspace],
+        globalDisabled: Bool
+    ) -> WorkspaceGitMetadataWatcherContextMenuMode {
+        guard !targetWorkspaces.isEmpty,
+              targetWorkspaces.allSatisfy({ !$0.isRemoteWorkspace }) else {
+            return .hidden
+        }
+
+        let allEffectivelyDisabled = targetWorkspaces.allSatisfy { workspace in
+            globalDisabled || workspace.gitMetadataWatcherDisabled
+        }
+        return allEffectivelyDisabled ? .enable : .disable
     }
 
     private func clampSidebarWidthIfNeeded(availableWidth: CGFloat? = nil) {
@@ -9765,6 +9786,7 @@ private struct SidebarTabItemSettingsSnapshot: Equatable {
     let sidebarShortcutHintXOffset: Double
     let sidebarShortcutHintYOffset: Double
     let alwaysShowShortcutHints: Bool
+    let gitMetadataWatcherGloballyDisabled: Bool
     let showsGitBranch: Bool
     let usesVerticalBranchLayout: Bool
     let showsGitBranchIcon: Bool
@@ -9793,6 +9815,7 @@ private struct SidebarTabItemSettingsSnapshot: Equatable {
             key: ShortcutHintDebugSettings.alwaysShowHintsKey,
             defaultValue: ShortcutHintDebugSettings.defaultAlwaysShowHints
         )
+        gitMetadataWatcherGloballyDisabled = GitMetadataWatcherSettings.isDisabled(defaults: defaults)
         showsGitBranch = Self.bool(defaults: defaults, key: "sidebarShowGitBranch", defaultValue: true)
         usesVerticalBranchLayout = SidebarBranchLayoutSettings.usesVerticalLayout(defaults: defaults)
         showsGitBranchIcon = Self.bool(defaults: defaults, key: "sidebarShowGitBranchIcon", defaultValue: false)
@@ -13179,8 +13202,10 @@ private struct TabItemView: View, Equatable {
         let isMulti = targetIds.count > 1
         let tabColorPalette = WorkspaceTabColorSettings.palette()
         let shouldPin = !tab.isPinned
-        let allGitMetadataWatcherDisabled = !targetWorkspaces.isEmpty
-            && targetWorkspaces.allSatisfy(\.gitMetadataWatcherDisabled)
+        let gitMetadataWatcherMenuMode = ContentView.workspaceGitMetadataWatcherContextMenuMode(
+            targetWorkspaces: targetWorkspaces,
+            globalDisabled: settings.gitMetadataWatcherGloballyDisabled
+        )
         let reconnectLabel = contextMenuLabel(
             multi: String(localized: "contextMenu.reconnectWorkspaces", defaultValue: "Reconnect Workspaces"),
             single: String(localized: "contextMenu.reconnectWorkspace", defaultValue: "Reconnect Workspace"),
@@ -13262,15 +13287,17 @@ private struct TabItemView: View, Equatable {
             }
         }
 
-        Button(
-            allGitMetadataWatcherDisabled
-                ? String(localized: "contextMenu.enableGitMetadataWatcher", defaultValue: "Enable Git Metadata Watcher")
-                : String(localized: "contextMenu.disableGitMetadataWatcher", defaultValue: "Disable Git Metadata Watcher")
-        ) {
-            tabManager.setWorkspaceGitMetadataWatcherDisabled(
-                workspaceIds: targetIds,
-                disabled: !allGitMetadataWatcherDisabled
-            )
+        if gitMetadataWatcherMenuMode != .hidden {
+            Button(
+                gitMetadataWatcherMenuMode == .enable
+                    ? String(localized: "contextMenu.enableGitMetadataWatcher", defaultValue: "Enable Git Metadata Watcher")
+                    : String(localized: "contextMenu.disableGitMetadataWatcher", defaultValue: "Disable Git Metadata Watcher")
+            ) {
+                tabManager.setWorkspaceGitMetadataWatcherDisabled(
+                    workspaceIds: targetIds,
+                    disabled: gitMetadataWatcherMenuMode == .disable
+                )
+            }
         }
 
         if !remoteContextMenuWorkspaceIds.isEmpty {

@@ -1591,7 +1591,9 @@ class TabManager: ObservableObject {
             return
         }
 
-        for panelId in workspace.panels.keys where gitProbeDirectory(for: workspace, panelId: panelId) != nil {
+        for panelId in workspace.panels.keys
+        where workspace.terminalPanel(for: panelId) != nil
+            && gitProbeDirectory(for: workspace, panelId: panelId) != nil {
             scheduleWorkspaceGitMetadataRefreshIfPossible(
                 workspaceId: workspace.id,
                 panelId: panelId,
@@ -1756,7 +1758,7 @@ class TabManager: ObservableObject {
         allowCachedResultsOverride: Bool? = nil
     ) {
         let now = Date()
-        let repoCacheCutoff = Date().addingTimeInterval(-Self.workspacePullRequestRepoCachePruneLifetime)
+        let repoCacheCutoff = now.addingTimeInterval(-Self.workspacePullRequestRepoCachePruneLifetime)
         workspacePullRequestRepoCacheBySlug = workspacePullRequestRepoCacheBySlug.filter {
             $0.value.fetchedAt >= repoCacheCutoff
         }
@@ -1789,7 +1791,10 @@ class TabManager: ObservableObject {
                     continue
                 }
 
-                guard isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
+                guard isWorkspacePullRequestRefreshEnabled(for: workspace, key: key) else {
+                    if workspace.panelPullRequests[panelId] != nil {
+                        workspace.clearPanelPullRequest(panelId: panelId)
+                    }
                     clearWorkspacePullRequestTracking(for: key)
                     continue
                 }
@@ -1919,6 +1924,15 @@ class TabManager: ObservableObject {
         directory: String?,
         reason: String
     ) -> [String] {
+        if !Self.workspacePullRequestRefreshAllowsRepoCache(reason: reason),
+           let directory {
+            let resolvedRepositorySlugs = Self.githubRepositorySlugs(directory: directory)
+            if let repositoryInfo = Self.gitRepositoryInfo(for: directory) {
+                workspaceGitRepositorySlugsByRepository[repositoryInfo] = resolvedRepositorySlugs
+            }
+            return resolvedRepositorySlugs
+        }
+
         let repositoryInfo = workspaceGitRepositoryByProbeKey[probeKey]
         let cachedRepositorySlugs = repositoryInfo.flatMap {
             workspaceGitRepositorySlugsByRepository[$0]
@@ -2157,6 +2171,19 @@ class TabManager: ObservableObject {
         if workspacePullRequestPendingRefreshKeys.isEmpty {
             workspacePullRequestPendingBypassRepoCache = false
         }
+    }
+
+    private func isWorkspacePullRequestRefreshEnabled(
+        for workspace: Workspace,
+        key: WorkspaceGitProbeKey
+    ) -> Bool {
+        guard isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
+            return false
+        }
+        guard let repositoryInfo = workspaceGitRepositoryByProbeKey[key] else {
+            return true
+        }
+        return workspaceGitRepositoryOptOutState[repositoryInfo] != true
     }
 
     private func resetWorkspacePullRequestRefreshState() {
@@ -2475,6 +2502,23 @@ class TabManager: ObservableObject {
         )
     }
 
+    func resolvedRepositorySlugsForPanelPullRequestRefreshForTesting(
+        workspaceId: UUID,
+        panelId: UUID,
+        reason: String
+    ) -> [String] {
+        guard let workspace = tabs.first(where: { $0.id == workspaceId }),
+              workspace.panels[panelId] != nil else {
+            return []
+        }
+        let key = WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
+        return resolvedRepositorySlugsForPullRequestRefresh(
+            probeKey: key,
+            directory: gitProbeDirectory(for: workspace, panelId: panelId),
+            reason: reason
+        )
+    }
+
     nonisolated static func setWorkspaceGitWatcherForceStartFailureForTesting(_ shouldFail: Bool) {
         WorkspaceGitEventWatcher.forceStartFailureForTesting = shouldFail
     }
@@ -2510,6 +2554,19 @@ class TabManager: ObservableObject {
                 .filter { $0.workspaceId == workspaceId }
                 .map(\.panelId)
         )
+    }
+
+    func trackedWorkspacePullRequestRefreshCandidatePanelIdsForTesting(workspaceId: UUID) -> Set<UUID> {
+        guard let workspace = tabs.first(where: { $0.id == workspaceId }),
+              !workspace.isRemoteWorkspace else {
+            return []
+        }
+        let panelIds = Set(workspace.panelGitBranches.keys).union(workspace.panelPullRequests.keys)
+        return Set(panelIds.filter { panelId in
+            let key = WorkspaceGitProbeKey(workspaceId: workspace.id, panelId: panelId)
+            guard workspace.panels[panelId] != nil else { return false }
+            return isWorkspacePullRequestRefreshEnabled(for: workspace, key: key)
+        })
     }
 
     private func trackedWorkspaceGitMetadataPollCandidatePanelIds(
@@ -2616,6 +2673,15 @@ class TabManager: ObservableObject {
             detachWorkspaceGitEventWatcher(for: key)
             workspaceGitTrackedDirectoryByKey.removeValue(forKey: key)
             clearWorkspacePullRequestTracking(for: key)
+            return
+        }
+
+        guard workspace.terminalPanel(for: panelId) != nil else {
+            clearWorkspaceGitProbe(key)
+            detachWorkspaceGitEventWatcher(for: key)
+            workspaceGitTrackedDirectoryByKey.removeValue(forKey: key)
+            clearWorkspacePullRequestTracking(for: key)
+            clearWorkspaceSidebarGitMetadata(for: key)
             return
         }
 
@@ -5093,6 +5159,7 @@ class TabManager: ObservableObject {
     func setWorkspaceGitMetadataWatcherDisabled(workspaceIds: [UUID], disabled: Bool) {
         for workspaceId in workspaceIds {
             guard let workspace = tabs.first(where: { $0.id == workspaceId }),
+                  !workspace.isRemoteWorkspace,
                   workspace.gitMetadataWatcherDisabled != disabled else {
                 continue
             }
@@ -5372,10 +5439,15 @@ class TabManager: ObservableObject {
         if select {
             selectedTabId = workspace.id
         }
-        scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
-            in: workspace,
-            reason: "workspaceAttached"
-        )
+        if isWorkspaceGitMetadataWatcherEnabled(for: workspace) {
+            scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
+                in: workspace,
+                reason: "workspaceAttached"
+            )
+        } else {
+            clearWorkspacePullRequestTracking(workspaceId: workspace.id)
+            clearWorkspaceSidebarGitMetadata(workspaceId: workspace.id)
+        }
     }
 
     // Keep closeTab as convenience alias
