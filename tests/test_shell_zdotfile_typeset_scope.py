@@ -26,6 +26,10 @@ def main() -> int:
     if not (wrapper_dir / ".zshenv").exists():
         print(f"SKIP: missing wrapper .zshenv at {wrapper_dir}")
         return 0
+    zsh_path = shutil.which("zsh")
+    if zsh_path is None:
+        print("SKIP: zsh not installed")
+        return 0
 
     base = Path(tempfile.mkdtemp(prefix=f"cmux_zdotfile_typeset_scope_{os.getpid()}_"))
     try:
@@ -48,14 +52,22 @@ def main() -> int:
         )
 
         env = dict(os.environ)
+        for key in (
+            "GHOSTTY_ZSH_ZDOTDIR",
+            "GHOSTTY_RESOURCES_DIR",
+            "CMUX_SHELL_INTEGRATION_DIR",
+            "CMUX_LOAD_GHOSTTY_ZSH_INTEGRATION",
+        ):
+            env.pop(key, None)
         env["HOME"] = str(home)
         env["ZDOTDIR"] = str(wrapper_dir)
         env["CMUX_ZSH_ZDOTDIR"] = str(orig)
+        env["CMUX_LOAD_GHOSTTY_ZSH_INTEGRATION"] = "0"
         env["CMUX_SHELL_INTEGRATION"] = "0"
 
         result = subprocess.run(
             [
-                "zsh",
+                zsh_path,
                 "-d",
                 "-l",
                 "-i",

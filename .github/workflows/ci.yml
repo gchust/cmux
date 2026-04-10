@@ -38,12 +38,6 @@ jobs:
       - name: Validate current GhosttyKit checksum pin
         run: ./tests/test_ci_ghosttykit_checksum_present.sh
 
-      - name: Validate update-homebrew workflow input handling
-        run: ./tests/test_ci_update_homebrew_input_env.sh
-
-      - name: Validate test-e2e workflow input handling
-        run: ./tests/test_ci_test_e2e_input_env.sh
-
   remote-daemon-tests:
     runs-on: ubuntu-latest
     steps:

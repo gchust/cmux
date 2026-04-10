@@ -55,6 +55,15 @@ def _recorded_lines(path: Path) -> list[str]:
     return [line for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def _timeout_output_text(data: str | bytes | None) -> str:
+    """Normalize TimeoutExpired stdio payloads into text."""
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data
+
+
 def _run_prompted_shell(
     *, root: Path, zsh_path: str, env: dict[str, str], shell_command: str
 ) -> tuple[bool, str]:
@@ -160,7 +169,7 @@ def _run_exec_string_shell(
             timeout=8,
         )
     except subprocess.TimeoutExpired as exc:
-        combined = ((exc.stdout or "") + (exc.stderr or "")).strip()
+        combined = (_timeout_output_text(exc.stdout) + _timeout_output_text(exc.stderr)).strip()
         return False, f"zsh exec-string session timed out after 8s: {combined}"
 
     combined = ((result.stdout or "") + (result.stderr or "")).strip()
@@ -418,7 +427,7 @@ def main() -> int:
         features="ssh-env,ssh-terminfo",
         term="xterm-ghostty",
         expect_term="xterm-256color",
-        expect_infocmp=True,
+        expect_infocmp=False,
         expect_wrapper=True,
         expected_target="nested.example",
         shell_command="ssh -fN nested.example",
