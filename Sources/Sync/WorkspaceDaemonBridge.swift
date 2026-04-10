@@ -105,7 +105,11 @@ final class WorkspaceDaemonBridge {
         // Build full workspace payload
         let workspaces: [[String: Any]] = tabManager.tabs.map { workspace in
             let preview = workspacePreview(for: workspace)
-            return [
+            // Collect daemon session IDs from terminal surfaces with active bridges
+            let sessionIDs: [String] = workspace.panels.values.compactMap { panel in
+                (panel as? TerminalPanel)?.surface.daemonBridge?.sessionID
+            }
+            var entry: [String: Any] = [
                 "id": workspace.id.uuidString.lowercased(),
                 "title": workspace.title,
                 "directory": workspace.currentDirectory,
@@ -113,7 +117,15 @@ final class WorkspaceDaemonBridge {
                 "phase": workspace.activeRemoteTerminalSessionCount > 0 ? "active" : "idle",
                 "color": workspace.customColor ?? "",
                 "unread_count": notificationStore.unreadCount(forTabId: workspace.id),
-            ] as [String: Any]
+            ]
+            if let primarySessionID = sessionIDs.first {
+                entry["session_id"] = primarySessionID
+            }
+            if sessionIDs.count > 1 {
+                entry["session_ids"] = sessionIDs
+            }
+            entry["pane_count"] = workspace.panels.count
+            return entry
         }
 
         let params: [String: Any] = [

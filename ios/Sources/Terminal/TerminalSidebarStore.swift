@@ -652,6 +652,11 @@ final class TerminalSidebarStore: ObservableObject {
         }
 
         ScannerLog.shared.log("subscription.workspaces hostname=\(hostname) port=\(port) count=\(workspaces.count)")
+        for ws in workspaces {
+            let sid = (ws["session_id"] as? String) ?? "none"
+            let title = (ws["title"] as? String) ?? "?"
+            ScannerLog.shared.log("  ws title=\(title) session_id=\(sid)")
+        }
 
         // Match host by hostname+port since stableID format varies (localhost vs IP)
         DispatchQueue.main.async { [weak self] in
@@ -758,6 +763,9 @@ final class TerminalSidebarStore: ObservableObject {
             let unreadCount = wsData["unread_count"] as? Int ?? 0
             let lastActivityMs = wsData["last_activity_at"] as? Int64 ?? Int64(Date().timeIntervalSince1970 * 1000)
             let lastActivity = Date(timeIntervalSince1970: Double(lastActivityMs) / 1000)
+            // Use the daemon session ID from the macOS bridge if available.
+            // This ensures iOS attaches to the same session the desktop is using.
+            let daemonSessionID = wsData["session_id"] as? String
 
             if let existing = workspaces.first(where: { $0.remoteWorkspaceID == remoteId && $0.hostID == hostID }) {
                 var updated = existing
@@ -766,12 +774,16 @@ final class TerminalSidebarStore: ObservableObject {
                 updated.phase = .connected
                 if !preview.isEmpty { updated.preview = preview }
                 updated.unread = unreadCount > 0
+                if let sid = daemonSessionID {
+                    ScannerLog.shared.log("  ws.update title=\(title) sessionName=\(sid) (was \(existing.tmuxSessionName))")
+                    updated.tmuxSessionName = sid
+                }
                 updatedWorkspaces.append(updated)
             } else {
                 var workspace = TerminalWorkspace(
                     hostID: hostID,
                     title: title,
-                    tmuxSessionName: "local-\(remoteId)",
+                    tmuxSessionName: daemonSessionID ?? "local-\(remoteId)",
                     remoteWorkspaceID: remoteId
                 )
                 workspace.lastActivity = lastActivity

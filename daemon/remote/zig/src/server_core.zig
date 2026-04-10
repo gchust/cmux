@@ -534,6 +534,7 @@ fn handleWorkspaceList(service: *session_service.Service, req: *const json_rpc.R
         phase: []const u8,
         color: ?[]const u8,
         unread_count: u32,
+        session_id: ?[]const u8,
         focused_pane_id: ?[]const u8,
         pane_count: usize,
         created_at: i64,
@@ -555,6 +556,7 @@ fn handleWorkspaceList(service: *session_service.Service, req: *const json_rpc.R
             .phase = ws.phase,
             .color = ws.color,
             .unread_count = ws.unread_count,
+            .session_id = ws.session_id,
             .focused_pane_id = ws.focused_pane_id,
             .pane_count = leaves.len,
             .created_at = ws.created_at,
@@ -754,6 +756,7 @@ fn handleWorkspaceSync(service: *session_service.Service, req: *const json_rpc.R
             .phase = if (obj.get("phase")) |v| (if (v == .string) v.string else "idle") else "idle",
             .color = if (obj.get("color")) |v| (if (v == .string) v.string else "") else "",
             .unread_count = unread_count,
+            .session_id = if (obj.get("session_id")) |v| (if (v == .string) v.string else null) else null,
         });
     }
 
@@ -789,6 +792,7 @@ fn notifyWorkspaceSubscribers(service: *session_service.Service) void {
         phase: []const u8,
         color: ?[]const u8,
         unread_count: u32,
+        session_id: ?[]const u8,
         focused_pane_id: ?[]const u8,
         pane_count: usize,
         created_at: i64,
@@ -810,6 +814,7 @@ fn notifyWorkspaceSubscribers(service: *session_service.Service) void {
             .phase = ws.phase,
             .color = ws.color,
             .unread_count = ws.unread_count,
+            .session_id = ws.session_id,
             .focused_pane_id = ws.focused_pane_id,
             .pane_count = leaves.len,
             .created_at = ws.created_at,

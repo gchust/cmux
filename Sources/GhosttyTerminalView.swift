@@ -3363,6 +3363,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
     var isViewInWindow: Bool { hostedView.window != nil }
     let id: UUID
     private(set) var tabId: UUID
+    var daemonBridge: DaemonTerminalBridge?
     /// Port ordinal for CMUX_PORT range assignment
     var portOrdinal: Int = 0
     /// Snapshotted once per app session so all workspaces use consistent values
@@ -3829,6 +3830,9 @@ final class TerminalSurface: Identifiable, ObservableObject {
         recordTeardownRequest(reason: "surface.teardown")
         markPortalLifecycleClosed(reason: "teardown")
 
+        daemonBridge?.stop()
+        daemonBridge = nil
+
         let callbackContext = surfaceCallbackContext
         surfaceCallbackContext = nil
 
@@ -4231,6 +4235,42 @@ final class TerminalSurface: Identifiable, ObservableObject {
             return value.withCString(body)
         }
 
+        // If the daemon is running, use Manual I/O mode so the daemon owns the PTY.
+        // This enables terminal sync between macOS and iOS clients.
+        #if DEBUG
+        let daemonRunning = MobileDaemonBridgeInline.shared.isRunning
+        let daemonPath = MobileDaemonBridgeInline.shared.daemonSocketPath
+        NSLog("📱 surface.checkDaemon running=%d path=%@", daemonRunning ? 1 : 0, daemonPath ?? "nil")
+        if let daemonSocket = daemonPath, daemonRunning {
+            let sessionID = "ws-\(tabId.uuidString.lowercased())-\(id.uuidString.prefix(8).lowercased())"
+            let shell = (env["SHELL"]?.isEmpty == false ? env["SHELL"] : nil)
+                ?? getenv("SHELL").map { String(cString: $0) }
+                ?? ProcessInfo.processInfo.environment["SHELL"]
+                ?? "/bin/zsh"
+            let shellCommand = "TERM=xterm-256color COLORTERM=truecolor \(shell) -l"
+
+            let bridge = DaemonTerminalBridge(
+                socketPath: daemonSocket,
+                sessionID: sessionID,
+                shellCommand: shellCommand
+            )
+            self.daemonBridge = bridge
+
+            // Set up Manual I/O mode
+            let bridgePtr = Unmanaged.passUnretained(bridge).toOpaque()
+            surfaceConfig.io_mode = GHOSTTY_SURFACE_IO_MANUAL
+            surfaceConfig.io_write_cb = { userdata, buf, len in
+                guard let userdata, let buf, len > 0 else { return }
+                let data = Data(bytes: buf, count: Int(len))
+                let bridge = Unmanaged<DaemonTerminalBridge>.fromOpaque(userdata).takeUnretainedValue()
+                bridge.writeToSession(data)
+            }
+            surfaceConfig.io_write_userdata = bridgePtr
+
+            dlog("surface.daemonBridge session=\(sessionID) socket=\(daemonSocket)")
+        }
+        #endif
+
         let createWithCommandAndWorkingDirectory = {
             withOptionalCString(resolvedCommand) { cCommand in
                 surfaceConfig.command = cCommand
@@ -4245,6 +4285,28 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
 
         createWithCommandAndWorkingDirectory()
+
+        // Start the daemon bridge read loop after surface creation
+        #if DEBUG
+        if let bridge = daemonBridge, let surface {
+            bridge.onOutput = { [weak self] data in
+                guard let self, let surface = self.surface else { return }
+                data.withUnsafeBytes { buffer in
+                    guard let baseAddress = buffer.baseAddress else { return }
+                    let pointer = baseAddress.assumingMemoryBound(to: CChar.self)
+                    ghostty_surface_process_output(surface, pointer, UInt(buffer.count))
+                }
+            }
+            bridge.onDisconnect = { [weak self] error in
+                if let error {
+                    NSLog("📱 DaemonBridge: disconnected with error: %@", error)
+                }
+                self?.daemonBridge = nil
+            }
+            let size = ghostty_surface_size(surface)
+            bridge.start(cols: Int(size.columns), rows: Int(size.rows))
+        }
+        #endif
 
         if surface == nil {
             surfaceCallbackContext?.release()
@@ -4393,6 +4455,11 @@ final class TerminalSurface: Identifiable, ObservableObject {
             ghostty_surface_set_size(surface, wpx, hpx)
             lastPixelWidth = wpx
             lastPixelHeight = hpx
+            // Notify daemon bridge of resize
+            if let bridge = daemonBridge {
+                let gridSize = ghostty_surface_size(surface)
+                bridge.resize(cols: Int(gridSize.columns), rows: Int(gridSize.rows))
+            }
         }
 
         // Let Ghostty continue rendering on its own wakeups for steady-state frames.

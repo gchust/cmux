@@ -97,6 +97,7 @@ pub const Workspace = struct {
     preview: []const u8 = "",
     phase: []const u8 = "idle",
     unread_count: u32 = 0,
+    session_id: ?[]const u8 = null,
     root_pane: *PaneNode,
     focused_pane_id: ?[]const u8 = null,
     created_at: i64,
@@ -400,6 +401,7 @@ pub const Registry = struct {
         if (ws.directory.len > 0) alloc.free(ws.directory);
         alloc.free(ws.preview);
         alloc.free(ws.phase);
+        if (ws.session_id) |s| alloc.free(s);
         if (ws.focused_pane_id) |f| alloc.free(f);
         ws.root_pane.deinit(alloc);
         alloc.destroy(ws.root_pane);
@@ -451,6 +453,7 @@ pub const Registry = struct {
                 .phase = try self.alloc.dupe(u8, ws_data.phase),
                 .color = if (ws_data.color.len > 0) try self.alloc.dupe(u8, ws_data.color) else null,
                 .unread_count = ws_data.unread_count,
+                .session_id = if (ws_data.session_id) |s| try self.alloc.dupe(u8, s) else null,
                 .root_pane = root,
                 .created_at = std.time.milliTimestamp(),
                 .last_activity_at = std.time.milliTimestamp(),
@@ -476,6 +479,7 @@ pub const Registry = struct {
         phase: []const u8 = "idle",
         color: []const u8 = "",
         unread_count: u32 = 0,
+        session_id: ?[]const u8 = null,
     };
 };
 
