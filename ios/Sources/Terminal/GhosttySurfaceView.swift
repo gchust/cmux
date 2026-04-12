@@ -366,6 +366,14 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
     private var lastBlinkToggle: CFTimeInterval = 0
     private var needsDraw: Bool = false
     private var surfaceHasReceivedOutput: Bool = false
+    // Serial background queue for feeding bytes into Ghostty. Keeps
+    // `ghostty_surface_process_output` off the main thread so a potential
+    // Ghostty internal mutex/futex wait can't freeze the UI. Ordering is
+    // preserved because the queue is serial.
+    private static let outputQueue = DispatchQueue(
+        label: "dev.cmux.GhosttySurfaceView.output",
+        qos: .userInitiated
+    )
     #if DEBUG
     private var lastInputTimestamp: CFTimeInterval = 0
     private var latencySamples: [Double] = []
@@ -602,28 +610,6 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
             }
         }
         #endif
-        #if DEBUG
-        // Detect OSC 11 query (\x1b]11;?\x07 or \x1b]11;?\x1b\\) from remote TUI (e.g. Codex).
-        if data.count >= 4, data.count < 500 {
-            let hasOSC11Query = data.withUnsafeBytes { buffer -> Bool in
-                guard let base = buffer.baseAddress else { return false }
-                let bytes = base.assumingMemoryBound(to: UInt8.self)
-                for i in 0..<(data.count - 4) {
-                    if bytes[i] == 0x1b, bytes[i+1] == 0x5d, // ESC ]
-                       bytes[i+2] == 0x31, bytes[i+3] == 0x31 { // "11"
-                        return true
-                    }
-                }
-                return false
-            }
-            if hasOSC11Query {
-                let escaped = data.map { byte in
-                    byte < 32 || byte == 127 ? String(format: "\\x%02x", byte) : String(UnicodeScalar(byte))
-                }.joined()
-                NSLog("🎨 processOutput: detected OSC 11 query in incoming data (%d bytes): %@", data.count, escaped)
-            }
-        }
-        #endif
         // The daemon normalizes line endings (\r\n → \n) in its read buffer.
         // Ghostty's VT parser needs \r\n, so restore the carriage returns.
         let restored: Data
@@ -637,27 +623,33 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         } else {
             restored = data
         }
-        restored.withUnsafeBytes { buffer in
-            guard let baseAddress = buffer.baseAddress else { return }
-            let pointer = baseAddress.assumingMemoryBound(to: CChar.self)
-            ghostty_surface_process_output(surface, pointer, UInt(buffer.count))
-        }
-        needsDraw = true
 
-        // Once the surface has received output, hide the snapshot fallback so the
-        // Metal IOSurfaceLayer (which renders colored text) is visible.
-        if !surfaceHasReceivedOutput {
-            surfaceHasReceivedOutput = true
-            snapshotFallbackView.isHidden = true
-        }
-
-        // Throttle expensive diagnostics to at most once per second to avoid
-        // freezing when TUIs (codex, vim, htop) flood rapid output.
-        let now = CACurrentMediaTime()
-        if now - lastProcessOutputLogTime > 1.0 {
-            lastProcessOutputLogTime = now
-            if window != nil {
-                logLayerTree(reason: "processOutput")
+        // Dispatch the actual Ghostty call to a serial background queue.
+        // ghostty_surface_process_output can block on Ghostty's internal
+        // mutex / mailbox, and running it on main would freeze the UI
+        // (see TerminalSidebarStore deadlock notes). Ordering is preserved
+        // because the queue is serial.
+        Self.outputQueue.async { [weak self] in
+            restored.withUnsafeBytes { buffer in
+                guard let baseAddress = buffer.baseAddress else { return }
+                let pointer = baseAddress.assumingMemoryBound(to: CChar.self)
+                ghostty_surface_process_output(surface, pointer, UInt(buffer.count))
+            }
+            // Hop back to main for Swift-side state updates and diagnostics.
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.needsDraw = true
+                if !self.surfaceHasReceivedOutput {
+                    self.surfaceHasReceivedOutput = true
+                    self.snapshotFallbackView.isHidden = true
+                }
+                let now = CACurrentMediaTime()
+                if now - self.lastProcessOutputLogTime > 1.0 {
+                    self.lastProcessOutputLogTime = now
+                    if self.window != nil {
+                        self.logLayerTree(reason: "processOutput")
+                    }
+                }
             }
         }
     }
@@ -1283,11 +1275,13 @@ final class TerminalInputTextView: UITextView {
             button.backgroundColor = UIColor(white: 0.35, alpha: 1)
             button.setTitleColor(.white, for: .normal)
             button.layer.cornerRadius = 6
-            // Command is Mac-only; hidden by default until updateModifierLabels(isMacRemote: true)
+            // Command is Mac-only; don't add it to the stack at all by default.
+            // updateModifierLabels(isMacRemote: true) will insert it dynamically.
             if action == .command {
-                button.isHidden = true
+                commandAccessoryButton = button
+            } else {
+                stack.addArrangedSubview(button)
             }
-            stack.addArrangedSubview(button)
         }
 
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -1331,6 +1325,9 @@ final class TerminalInputTextView: UITextView {
     }()
 
     private weak var accessoryStackView: UIStackView?
+    // Strong reference — command button is not always in the stack's arrangedSubviews,
+    // so nothing else retains it.
+    private var commandAccessoryButton: UIButton?
     private var isMacRemote = false
 
     func updateModifierLabels(isMacRemote: Bool) {
@@ -1340,9 +1337,28 @@ final class TerminalInputTextView: UITextView {
         for case let button as UIButton in stack.arrangedSubviews {
             guard let action = TerminalInputAccessoryAction(rawValue: button.tag) else { continue }
             button.setTitle(action.title(isMacRemote: isMacRemote), for: .normal)
-            // Command key is only useful on Mac terminals
-            if action == .command {
-                button.isHidden = !isMacRemote
+        }
+        // Insert/remove the command button based on whether this is a Mac terminal.
+        // We manage it outside the normal loop because it's not always in arrangedSubviews.
+        if let cmdButton = commandAccessoryButton {
+            if isMacRemote {
+                if cmdButton.superview == nil {
+                    // Insert after alternate (index 2 in original enum order: ctrl, alt, cmd)
+                    // Find the alt button's index in the current arrangedSubviews
+                    var insertIndex = stack.arrangedSubviews.count
+                    for (idx, view) in stack.arrangedSubviews.enumerated() {
+                        if view.tag == TerminalInputAccessoryAction.alternate.rawValue {
+                            insertIndex = idx + 1
+                            break
+                        }
+                    }
+                    stack.insertArrangedSubview(cmdButton, at: insertIndex)
+                }
+            } else {
+                if cmdButton.superview != nil {
+                    stack.removeArrangedSubview(cmdButton)
+                    cmdButton.removeFromSuperview()
+                }
             }
         }
         // Disarm command state if switching away from Mac remote

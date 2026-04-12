@@ -37,14 +37,30 @@ if [ -n "$TAG" ]; then
     APP_NAME="cmux DEV ${TAG}"
 fi
 
-# Discover wsPort from macOS daemon's .wsport file
+# Discover wsPort from macOS daemon's .wsport file.
+#
+# This is now a *hint* only — `TailscaleServerDiscovery` dynamically scans
+# the 52100-52199 port range at runtime, so a missing or stale hint can't
+# silently produce a discovery-less build. We still embed it when available
+# because probing a known port is faster than a 100-port sweep on launch.
 WS_PORT=""
 if [ -n "$TAG" ]; then
     TAG_SLUG=$(echo "$TAG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')
     WSPORT_FILE="/tmp/cmux-debug-${TAG_SLUG}.wsport"
     if [ -f "$WSPORT_FILE" ]; then
         WS_PORT=$(cat "$WSPORT_FILE")
-        echo "🔗 Found macOS daemon wsPort: $WS_PORT (from $WSPORT_FILE)"
+        # Sanity-check the hint against a live daemon so we don't embed a
+        # stale port. If no daemon is answering on that port, drop the hint
+        # and let the runtime scan handle it.
+        if ! nc -z 127.0.0.1 "$WS_PORT" 2>/dev/null; then
+            echo "⚠️  wsport hint $WS_PORT is stale (no daemon listening); will rely on runtime scan"
+            WS_PORT=""
+        else
+            echo "🔗 Found macOS daemon wsPort: $WS_PORT (from $WSPORT_FILE)"
+        fi
+    else
+        echo "⚠️  No wsport hint at $WSPORT_FILE — runtime port scan will handle discovery."
+        echo "    (Tip: run ./scripts/reload.sh --tag $TAG first if you want an exact match.)"
     fi
 fi
 

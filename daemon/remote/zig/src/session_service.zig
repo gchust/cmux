@@ -231,6 +231,10 @@ pub const Service = struct {
 
     fn resizeRuntimeIfPresent(self: *Service, status: *const session_registry.SessionStatus) !void {
         const runtime = self.runtimes.getPtr(status.session_id) orelse return;
+        // Skip the PTY resize if we don't have a real size yet. This avoids
+        // spurious ResizeFailed errors during the bootstrap/restore window
+        // when an attachment exists but hasn't reported geometry.
+        if (status.effective_cols == 0 or status.effective_rows == 0) return;
         try runtime.*.*.resize(status.effective_cols, status.effective_rows);
     }
 

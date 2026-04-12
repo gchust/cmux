@@ -443,6 +443,20 @@ final class TerminalSidebarStore: ObservableObject {
         }
 
         persist()
+
+        // If this host has a wsPort, make sure the main sidebar starts a
+        // workspace subscription for it immediately. Without this, a host
+        // added via the Find Servers sheet would appear as a pin with zero
+        // workspaces until the next background discovery tick (which may
+        // not cover it at all if its hostname isn't in the probe range).
+        if host.wsPort != nil {
+            startWorkspaceSubscription(for: host)
+        }
+        // Also hand it to the discovery so its periodic probe starts
+        // watching it for reachability changes.
+        if let discovery = serverDiscovery as? TailscaleServerDiscovery {
+            discovery.addHost(host)
+        }
     }
 
     func deleteHost(_ host: TerminalHost) {
@@ -1490,7 +1504,14 @@ final class TerminalSessionController: ObservableObject {
         clearStatusMessage()
         setPhase(reconnecting ? .reconnecting : .connecting, error: nil)
         shouldReconnect = true
-        let initialSize = terminalSurface.currentGridSize
+        // If the surface hasn't been laid out yet (grid size is 0x0), fall
+        // back to a sensible default. The daemon rejects attaches with 0
+        // cols/rows because the PTY ioctl fails, so passing zeros puts us in
+        // a reconnect loop until the view lays out.
+        let surfaceGrid = terminalSurface.currentGridSize
+        let initialSize: TerminalGridSize = (surfaceGrid.columns <= 0 || surfaceGrid.rows <= 0)
+            ? TerminalGridSize(columns: 80, rows: 24, pixelWidth: 640, pixelHeight: 384)
+            : surfaceGrid
 
         let transport = transportFactory.makeTransport(
             host: host,

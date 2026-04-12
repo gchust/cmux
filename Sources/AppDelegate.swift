@@ -14698,13 +14698,25 @@ final class MobileDaemonBridgeInline {
             return
         }
 
-        // Use the same socket path that WorkspaceDaemonBridge connects to
+        // Use the SAME daemon socket that `Workspace.ensureReachableConfiguration()`
+        // will use. Previously this class and the Workspace path each spawned
+        // their own daemon (one on `cmuxd-dev-<tag>.sock`, the other on
+        // `cmuxd.sock`), so iOS and macOS ended up talking to different PTY
+        // sessions and drifted. Using `CMUXD_UNIX_PATH` (set by reload.sh in
+        // LSEnvironment) keeps everything on one daemon. Fall back to the
+        // tag-derived path only when `CMUXD_UNIX_PATH` is not set.
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first?.appendingPathComponent("cmux").path ?? "/tmp"
         let tag = (env["CMUX_TAG"] ?? env["CMUX_LAUNCH_TAG"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let daemonSocket = tag.isEmpty ? "\(appSupport)/cmuxd.sock" : "\(appSupport)/cmuxd-dev-\(tag).sock"
+        let daemonSocket: String = {
+            if let configured = env["CMUXD_UNIX_PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !configured.isEmpty {
+                return configured
+            }
+            return tag.isEmpty ? "\(appSupport)/cmuxd.sock" : "\(appSupport)/cmuxd-dev-\(tag).sock"
+        }()
 
         // Kill any existing daemon on this socket so we get exactly one per DEV instance
         killDaemonOnSocket(socketPath: daemonSocket)

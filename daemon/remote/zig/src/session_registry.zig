@@ -214,19 +214,28 @@ fn recompute(session: *SessionState) void {
         return;
     }
 
+    // Compute the min over attachments that have reported a real size.
+    // Attachments with cols==0/rows==0 (e.g. the bootstrap attachment from
+    // terminal.open, or legacy attachments that never got a size) are
+    // ignored so they don't drag effective_cols/rows to zero and trip the
+    // PTY resize ioctl.
     var iter = session.attachments.iterator();
     var min_cols: u16 = 0;
     var min_rows: u16 = 0;
     while (iter.next()) |entry| {
         const value = entry.value_ptr.*;
-        if (min_cols == 0 or value.cols < min_cols) min_cols = value.cols;
-        if (min_rows == 0 or value.rows < min_rows) min_rows = value.rows;
+        if (value.cols > 0 and (min_cols == 0 or value.cols < min_cols)) min_cols = value.cols;
+        if (value.rows > 0 and (min_rows == 0 or value.rows < min_rows)) min_rows = value.rows;
     }
+
+    // Fall back to the last known size if no attachment has a real size yet.
+    if (min_cols == 0) min_cols = session.last_known_cols;
+    if (min_rows == 0) min_rows = session.last_known_rows;
 
     session.effective_cols = min_cols;
     session.effective_rows = min_rows;
-    session.last_known_cols = min_cols;
-    session.last_known_rows = min_rows;
+    if (min_cols > 0) session.last_known_cols = min_cols;
+    if (min_rows > 0) session.last_known_rows = min_rows;
 }
 
 fn normalizeSize(cols: u16, rows: u16) AttachmentState {

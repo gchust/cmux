@@ -178,7 +178,7 @@ final class ServerScanner: ObservableObject {
         }
     }
 
-    private static func probeSync(hostname: String, port: Int, secret: String, isTailscale: Bool = false) -> DiscoveredServer? {
+    static func probeSync(hostname: String, port: Int, secret: String, isTailscale: Bool = false) -> DiscoveredServer? {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
