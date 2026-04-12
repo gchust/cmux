@@ -14685,8 +14685,12 @@ final class MobileDaemonBridgeInline {
     private(set) var wsPort: Int?
     private(set) var daemonSocketPath: String?
     private(set) var wsSecret: String?
+    private var daemonReused = false
 
-    var isRunning: Bool { process?.isRunning == true }
+    /// True when a daemon is available, whether we spawned it or reused
+    /// an existing one. Used by applicationShouldTerminate to show the
+    /// "keep daemon?" dialog.
+    var isRunning: Bool { process?.isRunning == true || daemonReused }
 
     private init() {}
 
@@ -14733,6 +14737,7 @@ final class MobileDaemonBridgeInline {
             let wsportPath = debugSocketPath.replacingOccurrences(of: ".sock", with: ".wsport")
             try? String(port).write(toFile: wsportPath, atomically: true, encoding: .utf8)
             wsPortFilePath = wsportPath
+            daemonReused = true
             NSLog("📱 MobileBridge: reusing existing daemon on %@", daemonSocket)
             return
         }
