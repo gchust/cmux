@@ -11627,7 +11627,7 @@ extension Workspace: BonsplitDelegate {
 
         if explicitUserClose && shouldCloseWorkspaceOnLastSurface(for: tab.id) {
             clearStagedClosedBrowserRestoreSnapshot(for: tab.id)
-            owningTabManager?.closeWorkspaceWithConfirmation(self)
+            owningTabManager?.closeWorkspaceWithConfirmation(self, closeTrigger: .explicitLastSurfaceClose)
             return false
         }
 

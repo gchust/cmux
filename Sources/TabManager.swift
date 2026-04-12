@@ -715,6 +715,11 @@ fileprivate func cmuxVsyncIOSurfaceTimelineCallback(
 
 @MainActor
 class TabManager: ObservableObject {
+    enum WorkspaceCloseTrigger {
+        case workspaceAction
+        case explicitLastSurfaceClose
+    }
+
     private enum WorkspacePullRequestSnapshot: Equatable {
         case deferred
         case unsupportedRepository
@@ -3919,7 +3924,10 @@ class TabManager: ObservableObject {
     }
 
     @discardableResult
-    func closeWorkspaceWithConfirmation(_ workspace: Workspace) -> Bool {
+    func closeWorkspaceWithConfirmation(
+        _ workspace: Workspace,
+        closeTrigger: WorkspaceCloseTrigger = .workspaceAction
+    ) -> Bool {
         if workspace.isPinned {
             guard confirmClose(
                 title: String(localized: "dialog.closePinnedWorkspace.title", defaultValue: "Close pinned workspace?"),
@@ -3934,7 +3942,7 @@ class TabManager: ObservableObject {
             closeWorkspaceIfRunningProcess(workspace, requiresConfirmation: false)
             return true
         }
-        closeWorkspaceIfRunningProcess(workspace)
+        closeWorkspaceIfRunningProcess(workspace, closeTrigger: closeTrigger)
         return true
     }
 
@@ -4117,10 +4125,14 @@ class TabManager: ObservableObject {
         return String(localized: "workspace.displayName.fallback", defaultValue: "Workspace")
     }
 
-    private func closeWorkspaceIfRunningProcess(_ workspace: Workspace, requiresConfirmation: Bool = true) {
+    private func closeWorkspaceIfRunningProcess(
+        _ workspace: Workspace,
+        requiresConfirmation: Bool = true,
+        closeTrigger: WorkspaceCloseTrigger = .workspaceAction
+    ) {
         let willCloseWindow = tabs.count <= 1
         if requiresConfirmation,
-           workspaceNeedsConfirmClose(workspace),
+           workspaceNeedsConfirmClose(workspace, closeTrigger: closeTrigger),
            !confirmClose(
                title: String(localized: "dialog.closeWorkspace.title", defaultValue: "Close workspace?"),
                message: String(localized: "dialog.closeWorkspace.message", defaultValue: "This will close the workspace and all of its panels."),
@@ -4315,7 +4327,16 @@ class TabManager: ObservableObject {
         closeRuntimeSurface(tabId: tabId, surfaceId: surfaceId)
     }
 
-    private func workspaceNeedsConfirmClose(_ workspace: Workspace) -> Bool {
+    private func workspaceNeedsConfirmClose(
+        _ workspace: Workspace,
+        closeTrigger: WorkspaceCloseTrigger = .workspaceAction
+    ) -> Bool {
+        if closeTrigger == .explicitLastSurfaceClose,
+           !CloseTabWarningSettings.isEnabled() {
+            // Cmd+W / explicit tab closes that happen to close the whole workspace should
+            // respect the tab-close warning toggle without weakening explicit workspace-close flows.
+            return false
+        }
 #if DEBUG
         if ProcessInfo.processInfo.environment["CMUX_UI_TEST_FORCE_CONFIRM_CLOSE_WORKSPACE"] == "1" {
             return true
