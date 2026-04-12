@@ -805,6 +805,19 @@ fn handleWorkspaceSync(service: *session_service.Service, req: *const json_rpc.R
             else => false,
         } else false;
 
+        // Parse session_ids array (multi-pane workspaces).
+        var session_ids_list: std.ArrayList([]const u8) = .empty;
+        if (obj.get("session_ids")) |sids_val| {
+            if (sids_val == .array) {
+                for (sids_val.array.items) |sid_item| {
+                    if (sid_item == .string) {
+                        try session_ids_list.append(alloc, sid_item.string);
+                    }
+                }
+            }
+        }
+        const session_ids = try session_ids_list.toOwnedSlice(alloc);
+
         try sync_workspaces.append(alloc, .{
             .id = id.?,
             .title = title.?,
@@ -815,6 +828,7 @@ fn handleWorkspaceSync(service: *session_service.Service, req: *const json_rpc.R
             .unread_count = unread_count,
             .pinned = pinned,
             .session_id = if (obj.get("session_id")) |v| (if (v == .string) v.string else null) else null,
+            .session_ids = session_ids,
         });
     }
 

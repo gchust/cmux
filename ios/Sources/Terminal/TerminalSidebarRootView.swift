@@ -946,25 +946,54 @@ struct TerminalWorkspaceScreen: View {
         }
         .accessibilityIdentifier("terminal.workspace.detail")
         .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                if controller.phase != .connected || controller.errorMessage != nil || controller.statusMessage != nil {
-                    TerminalStatusBanner(
-                        host: host,
-                        phase: controller.phase,
-                        message: controller.statusMessage ?? controller.errorMessage
-                    )
-                }
-                if hasMultiplePanes {
-                    panePicker
-                }
+            if controller.phase != .connected || controller.errorMessage != nil || controller.statusMessage != nil {
+                TerminalStatusBanner(
+                    host: host,
+                    phase: controller.phase,
+                    message: controller.statusMessage ?? controller.errorMessage
+                )
             }
         }
-        .navigationTitle(workspace.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(resolvedBackground, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                if hasMultiplePanes {
+                    Menu {
+                        ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
+                            Button {
+                                selectedPaneIndex = index
+                                switchToPane(pane)
+                            } label: {
+                                Label(
+                                    paneLabel(pane, index: index),
+                                    systemImage: index == selectedPaneIndex ? "checkmark.circle.fill" : "terminal"
+                                )
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(workspace.title)
+                                .font(.headline)
+                            Text("\(panes.count)")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.white.opacity(0.2))
+                                .clipShape(Capsule())
+                            Image(systemName: "chevron.down")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.white)
+                    }
+                } else {
+                    Text(workspace.title)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button(TerminalHomeStrings.reconnectLabel) {
                     controller.reconnectNow()
@@ -978,32 +1007,6 @@ struct TerminalWorkspaceScreen: View {
         .onDisappear {
             controller.suspendPreservingState()
         }
-    }
-
-    @ViewBuilder
-    private var panePicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
-                    let label = paneLabel(pane, index: index)
-                    Button {
-                        selectedPaneIndex = index
-                        switchToPane(pane)
-                    } label: {
-                        Text(label)
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(index == selectedPaneIndex ? Color.white.opacity(0.2) : Color.clear)
-                            .cornerRadius(6)
-                            .foregroundStyle(.white)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-        }
-        .background(.ultraThinMaterial)
     }
 
     private func paneLabel(_ pane: TerminalPane, index: Int) -> String {

@@ -443,14 +443,54 @@ pub const Registry = struct {
             const id = try self.alloc.dupe(u8, ws_data.id);
             errdefer self.alloc.free(id);
 
-            const pane_id = try self.generatePaneId();
-            const root = try self.alloc.create(PaneNode);
-            root.* = .{ .leaf = .{
-                .id = pane_id,
-                .pane_type = .terminal,
-                .title = try self.alloc.dupe(u8, ""),
-                .directory = try self.alloc.dupe(u8, ws_data.directory),
-            } };
+            // Build pane tree. If multiple session_ids are provided
+            // (multi-pane workspace from cmd+d splits), create one leaf per
+            // session. Otherwise create a single leaf.
+            const all_sids = ws_data.session_ids;
+            const root: *PaneNode = root: {
+                if (all_sids.len > 1) {
+                    // Build a flat left-leaning split tree from the session list.
+                    var current: *PaneNode = try self.alloc.create(PaneNode);
+                    const first_pane_id = try self.generatePaneId();
+                    current.* = .{ .leaf = .{
+                        .id = first_pane_id,
+                        .pane_type = .terminal,
+                        .session_id = try self.alloc.dupe(u8, all_sids[0]),
+                        .directory = try self.alloc.dupe(u8, ws_data.directory),
+                    } };
+                    for (all_sids[1..]) |sid| {
+                        const right_pane_id = try self.generatePaneId();
+                        const right = try self.alloc.create(PaneNode);
+                        right.* = .{ .leaf = .{
+                            .id = right_pane_id,
+                            .pane_type = .terminal,
+                            .session_id = try self.alloc.dupe(u8, sid),
+                            .directory = try self.alloc.dupe(u8, ws_data.directory),
+                        } };
+                        const split = try self.alloc.create(PaneNode);
+                        split.* = .{ .split = .{
+                            .direction = .horizontal,
+                            .ratio = 0.5,
+                            .first = current,
+                            .second = right,
+                        } };
+                        current = split;
+                    }
+                    break :root current;
+                } else {
+                    const pane_id = try self.generatePaneId();
+                    const node = try self.alloc.create(PaneNode);
+                    const sid = ws_data.session_id orelse
+                        (if (all_sids.len == 1) all_sids[0] else null);
+                    node.* = .{ .leaf = .{
+                        .id = pane_id,
+                        .pane_type = .terminal,
+                        .session_id = if (sid) |s| try self.alloc.dupe(u8, s) else null,
+                        .directory = try self.alloc.dupe(u8, ws_data.directory),
+                    } };
+                    break :root node;
+                }
+            };
 
             const ws = Workspace{
                 .id = id,
@@ -489,6 +529,8 @@ pub const Registry = struct {
         unread_count: u32 = 0,
         pinned: bool = false,
         session_id: ?[]const u8 = null,
+        /// Additional session IDs for multi-pane workspaces.
+        session_ids: []const []const u8 = &.{},
     };
 };
 
