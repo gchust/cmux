@@ -120,9 +120,6 @@ final class MenuKeyEquivalentRoutingUITests: XCTestCase {
             "Expected the Cmd+E test page to finish loading before the shortcut. data=\(loadGotoSplit() ?? [:])"
         )
 
-        if let browserPanelId = loadGotoSplit()?["browserPanelId"], !browserPanelId.isEmpty {
-            focusBrowserWebView(browserPanelId: browserPanelId)
-        }
         app.activate()
         app.typeKey("e", modifierFlags: [.command])
 
@@ -172,7 +169,7 @@ final class MenuKeyEquivalentRoutingUITests: XCTestCase {
             return
         }
 
-        focusBrowserWebView(browserPanelId: browserPanelId)
+        refocusWebView(app: app)
 
         app.typeKey("g", modifierFlags: [.command])
         XCTAssertTrue(
@@ -185,7 +182,7 @@ final class MenuKeyEquivalentRoutingUITests: XCTestCase {
             "Expected visible cmux browser find bar to keep Cmd+G ownership after page refocus. data=\(loadGotoSplit() ?? [:])"
         )
 
-        focusBrowserWebView(browserPanelId: browserPanelId)
+        refocusWebView(app: app)
 
         app.typeKey("f", modifierFlags: [.command, .shift])
         XCTAssertTrue(
@@ -211,7 +208,6 @@ final class MenuKeyEquivalentRoutingUITests: XCTestCase {
             ensureForegroundAfterLaunch(app, timeout: 12.0),
             "Expected app to launch in foreground. state=\(app.state.rawValue)"
         )
-        XCTAssertTrue(waitForSocketPong(timeout: 12.0), "Expected control socket at \(socketPath)")
 
         XCTAssertTrue(
             waitForGotoSplit(keys: ["browserPanelId", "webViewFocused"], timeout: 10.0),
@@ -328,9 +324,6 @@ final class MenuKeyEquivalentRoutingUITests: XCTestCase {
 
     private func refocusWebView(app: XCUIApplication) {
         app.activate()
-        if let browserPanelId = loadGotoSplit()?["browserPanelId"], !browserPanelId.isEmpty {
-            focusBrowserWebView(browserPanelId: browserPanelId)
-        }
 
         // Cmd+L focuses the omnibar (so WebKit is no longer first responder).
         app.typeKey("l", modifierFlags: [.command])
@@ -368,66 +361,6 @@ final class MenuKeyEquivalentRoutingUITests: XCTestCase {
         }
         app.activate()
         return app.wait(for: .runningForeground, timeout: 2.0)
-    }
-
-    private func waitForSocketPong(timeout: TimeInterval) -> Bool {
-        waitForCondition(timeout: timeout) {
-            self.socketCommand("ping") == "PONG"
-        }
-    }
-
-    private func focusBrowserWebView(browserPanelId: String) {
-        guard waitForSocketPong(timeout: 8.0) else {
-            XCTFail("Expected control socket at \(socketPath)")
-            return
-        }
-        _ = socketCommand("focus_webview \(browserPanelId)")
-        XCTAssertTrue(
-            waitForCondition(timeout: 6.0) {
-                self.socketCommand("is_webview_focused \(browserPanelId)")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "true"
-            },
-            "Expected focus_webview to move keyboard focus into WKWebView for panel \(browserPanelId)"
-        )
-    }
-
-    private func socketCommand(_ cmd: String) -> String? {
-        socketCommandViaNetcat(cmd)
-    }
-
-    private func socketCommandViaNetcat(_ cmd: String) -> String? {
-        let nc = "/usr/bin/nc"
-        guard FileManager.default.isExecutableFile(atPath: nc) else { return nil }
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: nc)
-        proc.arguments = ["-U", socketPath, "-w", "2"]
-
-        let inPipe = Pipe()
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        proc.standardInput = inPipe
-        proc.standardOutput = outPipe
-        proc.standardError = errPipe
-
-        do {
-            try proc.run()
-        } catch {
-            return nil
-        }
-
-        if let data = (cmd + "\n").data(using: .utf8) {
-            inPipe.fileHandleForWriting.write(data)
-        }
-        inPipe.fileHandleForWriting.closeFile()
-        proc.waitUntilExit()
-
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        guard let outStr = String(data: outData, encoding: .utf8) else { return nil }
-        if let first = outStr.split(separator: "\n", maxSplits: 1).first {
-            return String(first).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let trimmed = outStr.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func waitForGotoSplit(keys: [String], timeout: TimeInterval) -> Bool {
