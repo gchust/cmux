@@ -428,6 +428,7 @@ private actor StubBootstrapSessionClient: TerminalRemoteDaemonSessionClient {
     private let openResult: TerminalRemoteDaemonTerminalOpenResult
     private var readResults: [Result<TerminalRemoteDaemonTerminalReadResult, Error>]
     private var openedCommandValues: [String] = []
+    private var openedSessionIDs: [String?] = []
     private var attachValues: [(sessionID: String, attachmentID: String, cols: Int, rows: Int)] = []
     private var detachValues: [(sessionID: String, attachmentID: String)] = []
     private var writeValues: [Data] = []
@@ -466,9 +467,11 @@ private actor StubBootstrapSessionClient: TerminalRemoteDaemonSessionClient {
     func terminalOpen(
         command: String,
         cols: Int,
-        rows: Int
+        rows: Int,
+        sessionID: String?
     ) async throws -> TerminalRemoteDaemonTerminalOpenResult {
         openedCommandValues.append(command)
+        openedSessionIDs.append(sessionID)
         return openResult
     }
 
