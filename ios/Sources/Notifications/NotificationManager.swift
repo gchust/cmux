@@ -281,6 +281,84 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         routeStore.store(userInfo: userInfo)
     }
 
+    // MARK: - Terminal local notifications
+
+    private var recentSeqs: [String: [UInt64]] = [:]
+    private let recentSeqLimit = 64
+
+    func handleTerminalNotifications(
+        sessionID: String,
+        seq: UInt64,
+        payload: TerminalNotificationsPayload
+    ) {
+        if isDuplicate(sessionID: sessionID, seq: seq) { return }
+        guard isAuthorized else { return }
+
+        let appForeground = UIApplication.shared.applicationState == .active
+
+        if payload.bell, !appForeground {
+            scheduleLocal(
+                title: "Terminal bell",
+                body: sessionID,
+                identifier: "bell-\(sessionID)-\(seq)",
+                sound: .default
+            )
+        }
+        if let cf = payload.commandFinished, !appForeground {
+            let body: String
+            if let exit = cf.exitCode {
+                body = "Exit \(exit)"
+            } else {
+                body = "Completed"
+            }
+            scheduleLocal(
+                title: "\(sessionID) finished",
+                body: body,
+                identifier: "cmd-\(sessionID)-\(seq)",
+                sound: .default
+            )
+        }
+        if let n = payload.notification {
+            let title = n.title?.nilIfEmpty ?? "Notification"
+            let body = n.body ?? ""
+            scheduleLocal(
+                title: title,
+                body: body,
+                identifier: "notif-\(sessionID)-\(seq)",
+                sound: .default
+            )
+        }
+    }
+
+    private func isDuplicate(sessionID: String, seq: UInt64) -> Bool {
+        var seqs = recentSeqs[sessionID] ?? []
+        if seqs.contains(seq) { return true }
+        seqs.append(seq)
+        if seqs.count > recentSeqLimit {
+            seqs.removeFirst(seqs.count - recentSeqLimit)
+        }
+        recentSeqs[sessionID] = seqs
+        return false
+    }
+
+    private func scheduleLocal(
+        title: String,
+        body: String,
+        identifier: String,
+        sound: UNNotificationSound?
+    ) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        if let sound { content.sound = sound }
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                NSLog("🔔 local notification failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
     var pendingRouteForTesting: NotificationRoute? {
         routeStore.pendingRoute
     }
@@ -373,6 +451,10 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             handleNotificationUserInfo(response.notification.request.content.userInfo)
         }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 enum NotificationRequestTrigger: String {

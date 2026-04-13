@@ -269,8 +269,17 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
 
     private func handlePushEvent(_ event: TerminalPushEvent) {
         switch event {
-        case .output(let data, let offset, _, let truncated, let eof):
+        case .output(let data, let offset, _, let truncated, let eof, let seq, let notifications):
             applySubscriptionPayload(data: data, offset: offset, truncated: truncated, eof: eof)
+            if let notifications, let sid = lockedSessionStateWithOffset()?.sessionID {
+                Task { @MainActor in
+                    NotificationManager.shared.handleTerminalNotifications(
+                        sessionID: sid,
+                        seq: seq,
+                        payload: notifications
+                    )
+                }
+            }
         case .eof:
             clearSessionState()
             finishDisconnect(error: nil)

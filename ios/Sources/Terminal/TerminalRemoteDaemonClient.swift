@@ -204,8 +204,29 @@ struct TerminalRemoteDaemonSessionHistoryResult: Decodable, Equatable, Sendable 
     }
 }
 
+struct TerminalNotificationsPayload: Sendable, Equatable {
+    struct CommandFinished: Sendable, Equatable {
+        let exitCode: Int?
+    }
+    struct Notification: Sendable, Equatable {
+        let title: String?
+        let body: String?
+    }
+    let bell: Bool
+    let commandFinished: CommandFinished?
+    let notification: Notification?
+}
+
 enum TerminalPushEvent: Sendable {
-    case output(data: Data, offset: UInt64, baseOffset: UInt64, truncated: Bool, eof: Bool)
+    case output(
+        data: Data,
+        offset: UInt64,
+        baseOffset: UInt64,
+        truncated: Bool,
+        eof: Bool,
+        seq: UInt64,
+        notifications: TerminalNotificationsPayload?
+    )
     case eof
 }
 
@@ -570,7 +591,45 @@ actor TerminalRemoteDaemonClient {
         let baseOffset = (json["base_offset"] as? UInt64) ?? (json["base_offset"] as? NSNumber)?.uint64Value ?? 0
         let truncated = (json["truncated"] as? Bool) ?? false
         let eof = (json["eof"] as? Bool) ?? false
-        return .output(data: decoded, offset: offset, baseOffset: baseOffset, truncated: truncated, eof: eof)
+        let seq = (json["seq"] as? UInt64) ?? (json["seq"] as? NSNumber)?.uint64Value ?? 0
+        let notifications = parseNotificationsPayload(json["notifications"])
+        return .output(
+            data: decoded,
+            offset: offset,
+            baseOffset: baseOffset,
+            truncated: truncated,
+            eof: eof,
+            seq: seq,
+            notifications: notifications
+        )
+    }
+
+    private static func parseNotificationsPayload(_ raw: Any?) -> TerminalNotificationsPayload? {
+        guard let dict = raw as? [String: Any] else { return nil }
+        let bell = (dict["bell"] as? Bool) ?? false
+        var commandFinished: TerminalNotificationsPayload.CommandFinished?
+        if let cf = dict["command_finished"] as? [String: Any] {
+            let exit: Int?
+            if let n = cf["exit_code"] as? Int {
+                exit = n
+            } else if let n = cf["exit_code"] as? NSNumber {
+                exit = n.intValue
+            } else {
+                exit = nil
+            }
+            commandFinished = .init(exitCode: exit)
+        }
+        var notification: TerminalNotificationsPayload.Notification?
+        if let n = dict["notification"] as? [String: Any] {
+            notification = .init(
+                title: n["title"] as? String,
+                body: n["body"] as? String
+            )
+        }
+        if !bell && commandFinished == nil && notification == nil {
+            return nil
+        }
+        return .init(bell: bell, commandFinished: commandFinished, notification: notification)
     }
 
     private func timeoutPending(id: Int) {
