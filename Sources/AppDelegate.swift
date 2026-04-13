@@ -8609,10 +8609,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 guard !rawURL.isEmpty else { return nil }
                 return URL(string: rawURL)
             } ?? defaultBrowserURL
-            guard let url else {
-                self.writeGotoSplitTestData(["setupError": "Invalid browser URL"])
-                return
-            }
             guard let browserPanelId = tabManager.newBrowserSplit(
                 tabId: tab.id,
                 fromPanelId: initialPanelId,
