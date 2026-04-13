@@ -373,15 +373,9 @@ final class TerminalSidebarStore: ObservableObject {
         // Send rename to server for remote workspaces so other devices pick it up
         if let remoteID = workspace.remoteWorkspaceID,
            let host = server(for: workspace.hostID),
-           let wsPort = host.wsPort {
-            let hostname = host.hostname
-            let secret = host.wsSecret ?? ""
-            DispatchQueue.global(qos: .userInitiated).async {
-                Self.sendWSCommand(
-                    hostname: hostname, port: wsPort, secret: secret,
-                    method: "workspace.rename",
-                    params: ["workspace_id": remoteID, "title": name]
-                )
+           let connection = daemonConnection(for: host) {
+            Task.detached {
+                try? await connection.workspaceRename(workspaceID: remoteID, title: name)
             }
         }
     }
@@ -396,16 +390,10 @@ final class TerminalSidebarStore: ObservableObject {
         let workspace = workspaces[index]
         if let remoteID = workspace.remoteWorkspaceID,
            let host = server(for: workspace.hostID),
-           let wsPort = host.wsPort {
-            let hostname = host.hostname
-            let secret = host.wsSecret ?? ""
+           let connection = daemonConnection(for: host) {
             let pinned = workspace.pinned
-            DispatchQueue.global(qos: .userInitiated).async {
-                Self.sendWSCommand(
-                    hostname: hostname, port: wsPort, secret: secret,
-                    method: "workspace.pin",
-                    params: ["workspace_id": remoteID, "pinned": pinned]
-                )
+            Task.detached {
+                try? await connection.workspacePin(workspaceID: remoteID, pinned: pinned)
             }
         }
     }
@@ -614,100 +602,77 @@ final class TerminalSidebarStore: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// Active WebSocket subscriptions keyed by host stableID
-    private var activeSubscriptions: Set<String> = []
+    /// Pooled daemon connections keyed by host stableID. One URLSession +
+    /// URLSessionWebSocketTask + RPC client per daemon, shared across
+    /// workspace subscription and (eventually) terminal sessions.
+    private var daemonConnections: [String: TerminalDaemonConnection] = [:]
+
+    fileprivate func daemonConnection(for host: TerminalHost) -> TerminalDaemonConnection? {
+        guard let wsPort = host.wsPort else { return nil }
+        let stableID = host.stableID
+        if let existing = daemonConnections[stableID] { return existing }
+        let connection = TerminalDaemonConnection(
+            hostname: host.hostname,
+            port: wsPort,
+            secret: host.wsSecret ?? ""
+        )
+        daemonConnections[stableID] = connection
+        return connection
+    }
 
     /// Start a persistent WebSocket subscription for workspace changes.
-    /// Subscribes once, then listens for push events and re-fetches on each change.
+    /// The TerminalDaemonConnection owns reconnect/backoff; we just consume
+    /// the event stream and apply updates to the workspace store.
     private func startWorkspaceSubscription(for host: TerminalHost) {
-        guard let wsPort = host.wsPort else { return }
+        guard let connection = daemonConnection(for: host) else { return }
         let stableID = host.stableID
-        guard !activeSubscriptions.contains(stableID) else { return }
-        activeSubscriptions.insert(stableID)
-
         let hostname = host.hostname
-        let secret = host.wsSecret ?? ""
+        let port = host.wsPort ?? 0
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            Self.debugLog("subscription: starting for \(hostname):\(wsPort)")
-            var consecutiveFailures = 0
+        Self.debugLog("subscription: starting for \(hostname):\(port)")
 
-            while self != nil && self?.activeSubscriptions.contains(stableID) == true {
-                // Connect, subscribe, and listen for events
-                guard let fd = Self.connectWebSocket(hostname: hostname, port: wsPort, secret: secret) else {
-                    consecutiveFailures += 1
-                    Self.debugLog("subscription: connect failed (\(consecutiveFailures)), retry with backoff")
-                    // After 3 consecutive failures, mark workspaces as
-                    // disconnected and host as offline (but keep them
-                    // visible so the user sees what was there). Continue
-                    // retrying with long backoff so we auto-recover when
-                    // the daemon comes back.
-                    if consecutiveFailures == 3 {
-                        DispatchQueue.main.async { [weak self] in
-                            guard let self else { return }
-                            if let hostID = self.hosts.first(where: { $0.stableID == stableID })?.id {
-                                if let hostIdx = self.hosts.firstIndex(where: { $0.id == hostID }) {
-                                    self.hosts[hostIdx].machineStatus = .offline
-                                }
-                                for i in self.workspaces.indices where self.workspaces[i].hostID == hostID {
-                                    self.workspaces[i].phase = .disconnected
-                                }
-                            }
-                        }
-                    }
-                    // Exponential backoff: 5, 10, 20, 30 max
-                    let delay = min(30.0, 5.0 * pow(2.0, Double(min(consecutiveFailures - 1, 3))))
-                    Thread.sleep(forTimeInterval: delay)
-                    continue
+        Task { [weak self, connection, stableID, hostname, port] in
+            await connection.startWorkspaceSubscription { event in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.handleDaemonConnectionEvent(
+                        event,
+                        stableID: stableID,
+                        hostname: hostname,
+                        port: port
+                    )
                 }
-                // Connected — reset failure counter and mark host online.
-                if consecutiveFailures > 0 {
-                    consecutiveFailures = 0
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self else { return }
-                        if let hostIdx = self.hosts.firstIndex(where: { $0.stableID == stableID }) {
-                            self.hosts[hostIdx].machineStatus = .online
-                        }
-                    }
-                }
-                consecutiveFailures = 0
-
-                // Subscribe (also returns initial workspace list)
-                Self.wsSend(fd: fd, data: "{\"id\":1,\"method\":\"workspace.subscribe\"}")
-                if let initialResp = Self.wsRecv(fd: fd) {
-                    self?.handleWorkspaceResponse(initialResp, hostname: hostname, port: wsPort, secret: secret)
-                }
-
-                // Listen for push events
-                while true {
-                    guard let event = Self.wsRecv(fd: fd) else {
-                        Self.debugLog("subscription: connection lost, reconnecting")
-                        break
-                    }
-                    guard event.contains("workspace.changed") else { continue }
-                    Self.debugLog("subscription: workspace.changed event received")
-
-                    // Try inline workspace data first (no round-trip needed)
-                    if event.contains("\"workspaces\"") {
-                        self?.handleWorkspaceResponse(event, hostname: hostname, port: wsPort, secret: secret)
-                    } else {
-                        // Fallback: re-fetch for older daemons without inline data
-                        Self.wsSend(fd: fd, data: "{\"id\":2,\"method\":\"workspace.list\"}")
-                        if let listResp = Self.wsRecv(fd: fd) {
-                            self?.handleWorkspaceResponse(listResp, hostname: hostname, port: wsPort, secret: secret)
-                        }
-                    }
-                }
-
-                close(fd)
-                Thread.sleep(forTimeInterval: 2) // Brief pause before reconnect
             }
+        }
+    }
 
-            Self.debugLog("subscription: stopped for \(hostname):\(wsPort)")
-            // Allow re-subscription if discovery finds the daemon again.
-            DispatchQueue.main.async { [weak self] in
-                self?.activeSubscriptions.remove(stableID)
+    private func handleDaemonConnectionEvent(
+        _ event: TerminalDaemonConnectionEvent,
+        stableID: String,
+        hostname: String,
+        port: Int
+    ) {
+        switch event {
+        case .connected:
+            if let hostIdx = hosts.firstIndex(where: { $0.stableID == stableID }) {
+                hosts[hostIdx].machineStatus = .online
             }
+        case .connectFailed(let consecutive):
+            Self.debugLog("subscription: connect failed (\(consecutive)) for \(hostname):\(port)")
+            if consecutive >= 3 {
+                if let hostIdx = hosts.firstIndex(where: { $0.stableID == stableID }) {
+                    hosts[hostIdx].machineStatus = .offline
+                }
+                if let hostID = hosts.first(where: { $0.stableID == stableID })?.id {
+                    for i in workspaces.indices where workspaces[i].hostID == hostID {
+                        workspaces[i].phase = .disconnected
+                    }
+                }
+            }
+        case .workspacesJSON(let line):
+            handleWorkspaceResponse(line, hostname: hostname, port: port, secret: "")
+        case .disconnected:
+            Self.debugLog("subscription: disconnected from \(hostname):\(port), connection will reconnect")
         }
     }
 
@@ -747,70 +712,6 @@ final class TerminalSidebarStore: ObservableObject {
                 palette: .sky, source: .discovered, transportPreference: .remoteDaemon
             )
             self.applyRemoteWorkspaces(workspaces, hostID: hostID, host: host)
-        }
-    }
-
-    /// Connect to cmuxd-remote WebSocket and authenticate. Returns fd or nil.
-    private static func connectWebSocket(hostname: String, port: Int, secret: String) -> Int32? {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return nil }
-
-        var timeout = timeval(tv_sec: 30, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        var sendTimeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = UInt16(port).bigEndian
-        inet_pton(AF_INET, hostname, &addr.sin_addr)
-        let addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let connectResult = withUnsafePointer(to: &addr) { addrPtr in
-            addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                Darwin.connect(fd, sockaddrPtr, addrLen)
-            }
-        }
-        guard connectResult == 0 else { close(fd); return nil }
-
-        // WebSocket upgrade
-        let req = "GET / HTTP/1.1\r\nHost: \(hostname):\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n"
-        _ = req.data(using: .utf8)?.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        var buf = [UInt8](repeating: 0, count: 4096)
-        let n = read(fd, &buf, buf.count)
-        guard n > 0, String(bytes: buf[0..<n], encoding: .utf8)?.contains("101") == true else { close(fd); return nil }
-
-        // Auth
-        if !secret.isEmpty {
-            wsSend(fd: fd, data: "{\"secret\":\"\(secret)\"}")
-            guard let authResp = wsRecv(fd: fd), authResp.contains("authenticated") else { close(fd); return nil }
-        } else {
-            wsSend(fd: fd, data: "{\"secret\":\"\"}")
-            _ = wsRecv(fd: fd)
-        }
-
-        return fd
-    }
-
-    /// Fetch workspace list from a discovered host via the cmuxd-remote WebSocket.
-    private func fetchRemoteWorkspaces(from host: TerminalHost) {
-        guard let wsPort = host.wsPort else { return }
-        let hostname = host.hostname
-        let secret = host.wsSecret ?? ""
-        // Use the stableID to find the post-merge host (applyDiscoveredHosts may reassign UUIDs)
-        let stableID = host.stableID
-        let resolvedHostID = hosts.first(where: { $0.stableID == stableID })?.id ?? host.id
-        Self.debugLog("fetchRemoteWorkspaces: \(hostname):\(wsPort) hostID=\(resolvedHostID) secret=\(secret.isEmpty ? "empty" : "\(secret.prefix(8))...")")
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let workspaceData = Self.fetchWorkspaceListViaWS(
-                hostname: hostname, port: wsPort, secret: secret
-            )
-            Self.debugLog("fetchRemoteWorkspaces result: \(workspaceData?.count ?? -1) workspaces")
-            guard let workspaceData else { return }
-
-            DispatchQueue.main.async {
-                self?.applyRemoteWorkspaces(workspaceData, hostID: resolvedHostID, host: host)
-            }
         }
     }
 
@@ -886,132 +787,6 @@ final class TerminalSidebarStore: ObservableObject {
         Self.debugLog("applyRemoteWorkspaces: \(data.count) workspaces from host \(host.name)")
     }
 
-    /// Connect to cmuxd-remote WebSocket and call workspace.list.
-    private static func fetchWorkspaceListViaWS(hostname: String, port: Int, secret: String) -> [[String: Any]]? {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return nil }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 3, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var hints = addrinfo()
-        hints.ai_family = AF_INET
-        hints.ai_socktype = SOCK_STREAM
-        var result: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(hostname, String(port), &hints, &result) == 0, let addrInfo = result else { return nil }
-        defer { freeaddrinfo(addrInfo) }
-
-        guard Darwin.connect(fd, addrInfo.pointee.ai_addr, addrInfo.pointee.ai_addrlen) == 0 else { return nil }
-
-        // WebSocket upgrade
-        let key = "dGVzdA=="
-        let req = "GET / HTTP/1.1\r\nHost: \(hostname):\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: \(key)\r\nSec-WebSocket-Version: 13\r\n\r\n"
-        _ = req.data(using: .utf8)?.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        var buf = [UInt8](repeating: 0, count: 4096)
-        let n = read(fd, &buf, buf.count)
-        guard n > 0, String(bytes: buf[0..<n], encoding: .utf8)?.contains("101") == true else { return nil }
-
-        // Auth (skip if no secret configured - for local dev)
-        if !secret.isEmpty {
-            wsSend(fd: fd, data: "{\"secret\":\"\(secret)\"}")
-            guard let authResp = wsRecv(fd: fd), authResp.contains("authenticated") else { return nil }
-        } else {
-            // Try without auth - some dev builds allow unauthenticated access
-            wsSend(fd: fd, data: "{\"secret\":\"\"}")
-            let authResp = wsRecv(fd: fd)
-            // Continue regardless of auth result for local dev
-            if authResp?.contains("unauthorized") == true { return nil }
-        }
-
-        // workspace.list
-        wsSend(fd: fd, data: "{\"id\":1,\"method\":\"workspace.list\"}")
-        guard let listResp = wsRecv(fd: fd),
-              let jsonData = listResp.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-              let resultObj = json["result"] as? [String: Any],
-              let workspaces = resultObj["workspaces"] as? [[String: Any]] else {
-            return nil
-        }
-
-        return workspaces
-    }
-
-    /// Send a one-shot JSON-RPC command to a cmuxd-remote WebSocket.
-    @discardableResult
-    private static func sendWSCommand(hostname: String, port: Int, secret: String, method: String, params: [String: Any]) -> Bool {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { close(fd) }
-
-        var timeout = timeval(tv_sec: 3, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var hints = addrinfo()
-        hints.ai_family = AF_INET
-        hints.ai_socktype = SOCK_STREAM
-        var result: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(hostname, String(port), &hints, &result) == 0, let addrInfo = result else { return false }
-        defer { freeaddrinfo(addrInfo) }
-
-        guard Darwin.connect(fd, addrInfo.pointee.ai_addr, addrInfo.pointee.ai_addrlen) == 0 else { return false }
-
-        let key = "dGVzdA=="
-        let req = "GET / HTTP/1.1\r\nHost: \(hostname):\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: \(key)\r\nSec-WebSocket-Version: 13\r\n\r\n"
-        _ = req.data(using: .utf8)?.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        var buf = [UInt8](repeating: 0, count: 4096)
-        let n = read(fd, &buf, buf.count)
-        guard n > 0, String(bytes: buf[0..<n], encoding: .utf8)?.contains("101") == true else { return false }
-
-        if !secret.isEmpty {
-            wsSend(fd: fd, data: "{\"secret\":\"\(secret)\"}")
-            guard let authResp = wsRecv(fd: fd), authResp.contains("authenticated") else { return false }
-        } else {
-            wsSend(fd: fd, data: "{\"secret\":\"\"}")
-            let authResp = wsRecv(fd: fd)
-            if authResp?.contains("unauthorized") == true { return false }
-        }
-
-        let payload: [String: Any] = ["id": 1, "method": method, "params": params]
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-              let jsonString = String(data: jsonData, encoding: .utf8) else { return false }
-        wsSend(fd: fd, data: jsonString)
-        _ = wsRecv(fd: fd)
-        return true
-    }
-
-    private static func wsSend(fd: Int32, data: String) {
-        guard let payload = data.data(using: .utf8) else { return }
-        var frame = Data()
-        frame.append(0x81)
-        let maskKey = (0..<4).map { _ in UInt8.random(in: 0...255) }
-        frame.append(UInt8(0x80 | min(payload.count, 125)))
-        frame.append(contentsOf: maskKey)
-        for (i, b) in payload.enumerated() { frame.append(b ^ maskKey[i % 4]) }
-        _ = frame.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-    }
-
-    private static func wsRecv(fd: Int32) -> String? {
-        var header = [UInt8](repeating: 0, count: 2)
-        guard read(fd, &header, 2) == 2 else { return nil }
-        var length = Int(header[1] & 0x7F)
-        if length == 126 {
-            var ext = [UInt8](repeating: 0, count: 2)
-            guard read(fd, &ext, 2) == 2 else { return nil }
-            length = Int(ext[0]) << 8 | Int(ext[1])
-        }
-        guard length > 0, length < 65536 else { return nil }
-        var payload = [UInt8](repeating: 0, count: length)
-        var total = 0
-        while total < length {
-            let n = read(fd, &payload[total], length - total)
-            if n <= 0 { return nil }
-            total += n
-        }
-        return String(bytes: payload, encoding: .utf8)
-    }
 
     private func observeNetworkPath() {
         guard let networkPathMonitor else { return }

@@ -120,6 +120,20 @@ struct TerminalRemoteDaemonTerminalReadResult: Decodable, Equatable, Sendable {
     }
 }
 
+struct TerminalRemoteDaemonWorkspacePane: Decodable, Equatable, Sendable {
+    let id: String
+    let sessionID: String?
+    let title: String?
+    let directory: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case sessionID = "session_id"
+        case title
+        case directory
+    }
+}
+
 struct TerminalRemoteDaemonWorkspaceEntry: Decodable, Equatable, Sendable {
     let id: String
     let title: String
@@ -128,6 +142,11 @@ struct TerminalRemoteDaemonWorkspaceEntry: Decodable, Equatable, Sendable {
     let paneCount: Int
     let createdAt: Int64
     let lastActivityAt: Int64
+    let sessionID: String?
+    let preview: String?
+    let unreadCount: Int?
+    let pinned: Bool?
+    let panes: [TerminalRemoteDaemonWorkspacePane]?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -137,6 +156,11 @@ struct TerminalRemoteDaemonWorkspaceEntry: Decodable, Equatable, Sendable {
         case paneCount = "pane_count"
         case createdAt = "created_at"
         case lastActivityAt = "last_activity_at"
+        case sessionID = "session_id"
+        case preview
+        case unreadCount = "unread_count"
+        case pinned
+        case panes
     }
 }
 
