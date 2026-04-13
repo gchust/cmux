@@ -60,6 +60,29 @@ final class TabManagerSessionSnapshotTests: XCTestCase {
         XCTAssertNotEqual(initialFingerprint, manager.sessionAutosaveFingerprint())
     }
 
+    func testSessionSnapshotOmitsGitMetadataWhenWorkspaceWatcherDisabled() {
+        let manager = TabManager()
+        guard let workspace = manager.selectedWorkspace,
+              let panelId = workspace.focusedPanelId else {
+            XCTFail("Expected initial workspace with focused panel")
+            return
+        }
+
+        manager.setWorkspaceGitMetadataWatcherDisabled(workspaceIds: [workspace.id], disabled: true)
+        workspace.updatePanelGitBranch(panelId: panelId, branch: "feature/stale", isDirty: true)
+
+        let snapshot = manager.sessionSnapshot(includeScrollback: false)
+        guard let workspaceSnapshot = snapshot.workspaces.first,
+              let panelSnapshot = workspaceSnapshot.panels.first(where: { $0.id == panelId }) else {
+            XCTFail("Expected workspace snapshot for focused panel")
+            return
+        }
+
+        XCTAssertEqual(workspaceSnapshot.gitMetadataWatcherDisabled, true)
+        XCTAssertNil(workspaceSnapshot.gitBranch)
+        XCTAssertNil(panelSnapshot.gitBranch)
+    }
+
     func testSessionSnapshotExcludesRemoteWorkspacesFromRestore() throws {
         let manager = TabManager()
         let remoteWorkspace = manager.addWorkspace(select: true)

@@ -2343,13 +2343,14 @@ struct ContentView: View {
         targetWorkspaces: [Workspace],
         globalDisabled: Bool
     ) -> WorkspaceGitMetadataWatcherContextMenuMode {
-        guard !targetWorkspaces.isEmpty,
+        guard !globalDisabled,
+              !targetWorkspaces.isEmpty,
               targetWorkspaces.allSatisfy({ !$0.isRemoteWorkspace }) else {
             return .hidden
         }
 
         let allEffectivelyDisabled = targetWorkspaces.allSatisfy { workspace in
-            globalDisabled || workspace.gitMetadataWatcherDisabled
+            workspace.gitMetadataWatcherDisabled
         }
         return allEffectivelyDisabled ? .enable : .disable
     }
@@ -9960,6 +9961,7 @@ struct VerticalTabsSidebar: View {
         let canCloseWorkspace = workspaceCount > 1
         let workspaceNumberShortcut = self.workspaceNumberShortcut
         let tabItemSettings = tabItemSettingsStore.snapshot
+        let tabById = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         let tabIndexById = Dictionary(uniqueKeysWithValues: tabs.enumerated().map {
             ($0.element.id, $0.offset)
         })
@@ -9989,6 +9991,7 @@ struct VerticalTabsSidebar: View {
                                 let contextMenuWorkspaceIds = usesSelectedContextMenuTargets
                                     ? selectedContextTargetIds
                                     : [tab.id]
+                                let contextMenuTargetWorkspaces = contextMenuWorkspaceIds.compactMap { tabById[$0] }
                                 let remoteContextMenuWorkspaceIds = usesSelectedContextMenuTargets
                                     ? selectedRemoteContextMenuWorkspaceIds
                                     : (tab.isRemoteWorkspace ? [tab.id] : [])
@@ -9998,6 +10001,10 @@ struct VerticalTabsSidebar: View {
                                 let allRemoteContextMenuTargetsDisconnected = usesSelectedContextMenuTargets
                                     ? allSelectedRemoteContextMenuTargetsDisconnected
                                     : (tab.isRemoteWorkspace && tab.remoteConnectionState == .disconnected)
+                                let gitMetadataWatcherMenuMode = ContentView.workspaceGitMetadataWatcherContextMenuMode(
+                                    targetWorkspaces: contextMenuTargetWorkspaces,
+                                    globalDisabled: tabItemSettings.gitMetadataWatcherGloballyDisabled
+                                )
                                 let liveUnreadCount = notificationStore.unreadCount(forTabId: tab.id)
                                 let liveLatestNotificationText: String? = {
                                     guard showsSidebarNotificationMessage,
@@ -10042,6 +10049,7 @@ struct VerticalTabsSidebar: View {
                                     draggedTabId: $draggedTabId,
                                     dropIndicator: $dropIndicator,
                                     contextMenuWorkspaceIds: contextMenuWorkspaceIds,
+                                    gitMetadataWatcherMenuMode: gitMetadataWatcherMenuMode,
                                     remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
                                     allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
                                     allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
@@ -12450,6 +12458,7 @@ private struct TabItemView: View, Equatable {
         lhs.rowSpacing == rhs.rowSpacing &&
         lhs.showsModifierShortcutHints == rhs.showsModifierShortcutHints &&
         lhs.contextMenuWorkspaceIds == rhs.contextMenuWorkspaceIds &&
+        lhs.gitMetadataWatcherMenuMode == rhs.gitMetadataWatcherMenuMode &&
         lhs.remoteContextMenuWorkspaceIds == rhs.remoteContextMenuWorkspaceIds &&
         lhs.allRemoteContextMenuTargetsConnecting == rhs.allRemoteContextMenuTargetsConnecting &&
         lhs.allRemoteContextMenuTargetsDisconnected == rhs.allRemoteContextMenuTargetsDisconnected &&
@@ -12480,6 +12489,7 @@ private struct TabItemView: View, Equatable {
     @Binding var draggedTabId: UUID?
     @Binding var dropIndicator: SidebarDropIndicator?
     let contextMenuWorkspaceIds: [UUID]
+    let gitMetadataWatcherMenuMode: ContentView.WorkspaceGitMetadataWatcherContextMenuMode
     let remoteContextMenuWorkspaceIds: [UUID]
     let allRemoteContextMenuTargetsConnecting: Bool
     let allRemoteContextMenuTargetsDisconnected: Bool
@@ -13196,16 +13206,9 @@ private struct TabItemView: View, Equatable {
     @ViewBuilder
     private var workspaceContextMenu: some View {
         let targetIds = contextMenuWorkspaceIds
-        let targetWorkspaces = targetIds.compactMap { workspaceId in
-            tabManager.tabs.first(where: { $0.id == workspaceId })
-        }
         let isMulti = targetIds.count > 1
         let tabColorPalette = WorkspaceTabColorSettings.palette()
         let shouldPin = !tab.isPinned
-        let gitMetadataWatcherMenuMode = ContentView.workspaceGitMetadataWatcherContextMenuMode(
-            targetWorkspaces: targetWorkspaces,
-            globalDisabled: settings.gitMetadataWatcherGloballyDisabled
-        )
         let reconnectLabel = contextMenuLabel(
             multi: String(localized: "contextMenu.reconnectWorkspaces", defaultValue: "Reconnect Workspaces"),
             single: String(localized: "contextMenu.reconnectWorkspace", defaultValue: "Reconnect Workspace"),

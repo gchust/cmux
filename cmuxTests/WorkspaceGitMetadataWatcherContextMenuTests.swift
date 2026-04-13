@@ -8,7 +8,45 @@ import XCTest
 
 @MainActor
 final class WorkspaceGitMetadataWatcherContextMenuTests: XCTestCase {
-    func testContextMenuModeUsesEffectiveGlobalWatcherState() {
+    private func makeRemoteWorkspace(in manager: TabManager) -> Workspace {
+        let workspace = manager.addWorkspace(select: false)
+        workspace.configureRemoteConnection(
+            WorkspaceRemoteConfiguration(
+                destination: "cmux-macmini",
+                port: nil,
+                identityFile: nil,
+                sshOptions: [],
+                localProxyPort: nil,
+                relayPort: 64017,
+                relayID: String(repeating: "a", count: 16),
+                relayToken: String(repeating: "b", count: 64),
+                localSocketPath: "/tmp/cmux-debug-test.sock",
+                terminalStartupCommand: "ssh cmux-macmini"
+            ),
+            autoConnect: false
+        )
+        return workspace
+    }
+
+    func testContextMenuModeShowsEnableWhenWorkspaceWatcherDisabled() {
+        let manager = TabManager()
+        guard let workspace = manager.selectedWorkspace else {
+            XCTFail("Expected selected workspace")
+            return
+        }
+
+        workspace.gitMetadataWatcherDisabled = true
+
+        XCTAssertEqual(
+            ContentView.workspaceGitMetadataWatcherContextMenuMode(
+                targetWorkspaces: [workspace],
+                globalDisabled: false
+            ),
+            .enable
+        )
+    }
+
+    func testContextMenuModeHidesToggleWhenGlobalWatcherDisabled() {
         let manager = TabManager()
         guard let workspace = manager.selectedWorkspace else {
             XCTFail("Expected selected workspace")
@@ -22,7 +60,7 @@ final class WorkspaceGitMetadataWatcherContextMenuTests: XCTestCase {
                 targetWorkspaces: [workspace],
                 globalDisabled: true
             ),
-            .enable
+            .hidden
         )
     }
 
@@ -33,22 +71,7 @@ final class WorkspaceGitMetadataWatcherContextMenuTests: XCTestCase {
             return
         }
 
-        let remoteWorkspace = manager.addWorkspace(select: false)
-        remoteWorkspace.configureRemoteConnection(
-            WorkspaceRemoteConfiguration(
-                destination: "cmux-macmini",
-                port: nil,
-                identityFile: nil,
-                sshOptions: [],
-                localProxyPort: nil,
-                relayPort: 64017,
-                relayID: String(repeating: "a", count: 16),
-                relayToken: String(repeating: "b", count: 64),
-                localSocketPath: "/tmp/cmux-debug-test.sock",
-                terminalStartupCommand: "ssh cmux-macmini"
-            ),
-            autoConnect: false
-        )
+        let remoteWorkspace = makeRemoteWorkspace(in: manager)
 
         XCTAssertEqual(
             ContentView.workspaceGitMetadataWatcherContextMenuMode(
@@ -61,22 +84,7 @@ final class WorkspaceGitMetadataWatcherContextMenuTests: XCTestCase {
 
     func testSetWorkspaceGitMetadataWatcherDisabledSkipsRemoteWorkspace() {
         let manager = TabManager()
-        let remoteWorkspace = manager.addWorkspace(select: false)
-        remoteWorkspace.configureRemoteConnection(
-            WorkspaceRemoteConfiguration(
-                destination: "cmux-macmini",
-                port: nil,
-                identityFile: nil,
-                sshOptions: [],
-                localProxyPort: nil,
-                relayPort: 64017,
-                relayID: String(repeating: "a", count: 16),
-                relayToken: String(repeating: "b", count: 64),
-                localSocketPath: "/tmp/cmux-debug-test.sock",
-                terminalStartupCommand: "ssh cmux-macmini"
-            ),
-            autoConnect: false
-        )
+        let remoteWorkspace = makeRemoteWorkspace(in: manager)
 
         XCTAssertTrue(remoteWorkspace.isRemoteWorkspace)
 

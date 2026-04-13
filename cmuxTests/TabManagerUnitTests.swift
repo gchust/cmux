@@ -1015,6 +1015,32 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
         XCTAssertTrue(workspace.sidebarPullRequestsInDisplayOrder().isEmpty)
     }
 
+    func testWorkspaceGitMetadataWatcherDisableClearsSidebarMetadataImmediately() throws {
+        let manager = TabManager()
+        guard let workspace = manager.selectedWorkspace,
+              let panelId = workspace.focusedPanelId else {
+            XCTFail("Expected selected workspace with focused panel")
+            return
+        }
+
+        workspace.updatePanelGitBranch(panelId: panelId, branch: "feature/immediate-clear", isDirty: true)
+        workspace.updatePanelPullRequest(
+            panelId: panelId,
+            number: 2731,
+            label: "PR",
+            url: try XCTUnwrap(URL(string: "https://github.com/manaflow-ai/cmux/pull/2731")),
+            status: .open,
+            branch: "feature/immediate-clear"
+        )
+
+        workspace.gitMetadataWatcherDisabled = true
+
+        XCTAssertNil(workspace.panelGitBranches[panelId])
+        XCTAssertNil(workspace.panelPullRequests[panelId])
+        XCTAssertNil(workspace.gitBranch)
+        XCTAssertNil(workspace.pullRequest)
+    }
+
     func testGlobalGitMetadataWatcherDisableClearsUnscopedSidebarMetadata() throws {
         let defaults = UserDefaults.standard
         let originalSetting = defaults.object(forKey: GitMetadataWatcherSettings.disabledKey)

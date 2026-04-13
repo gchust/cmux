@@ -261,9 +261,16 @@ extension Workspace {
             allPanelIds.append(panelId)
         }
 
+        let includeGitMetadata = !gitMetadataWatcherDisabled
         let panelSnapshots = allPanelIds
             .prefix(SessionPersistencePolicy.maxPanelsPerWorkspace)
-            .compactMap { sessionPanelSnapshot(panelId: $0, includeScrollback: includeScrollback) }
+            .compactMap {
+                sessionPanelSnapshot(
+                    panelId: $0,
+                    includeScrollback: includeScrollback,
+                    includeGitMetadata: includeGitMetadata
+                )
+            }
 
         let statusSnapshots = statusEntries.values
             .sorted { lhs, rhs in lhs.key < rhs.key }
@@ -288,9 +295,11 @@ extension Workspace {
         let progressSnapshot = progress.map { progress in
             SessionProgressSnapshot(value: progress.value, label: progress.label)
         }
-        let gitBranchSnapshot = gitBranch.map { branch in
-            SessionGitBranchSnapshot(branch: branch.branch, isDirty: branch.isDirty)
-        }
+        let gitBranchSnapshot = includeGitMetadata
+            ? gitBranch.map { branch in
+                SessionGitBranchSnapshot(branch: branch.branch, isDirty: branch.isDirty)
+            }
+            : nil
 
         return SessionWorkspaceSnapshot(
             processTitle: processTitle,
@@ -357,10 +366,7 @@ extension Workspace {
         }
         progress = snapshot.progress.map { SidebarProgressState(value: $0.value, label: $0.label) }
         if gitMetadataWatcherDisabled {
-            gitBranch = nil
-            panelGitBranches.removeAll()
-            pullRequest = nil
-            panelPullRequests.removeAll()
+            clearCachedSidebarGitMetadata()
         } else {
             gitBranch = snapshot.gitBranch.map { SidebarGitBranchState(branch: $0.branch, isDirty: $0.isDirty) }
         }
@@ -436,7 +442,11 @@ extension Workspace {
         return decoded.id
     }
 
-    private func sessionPanelSnapshot(panelId: UUID, includeScrollback: Bool) -> SessionPanelSnapshot? {
+    private func sessionPanelSnapshot(
+        panelId: UUID,
+        includeScrollback: Bool,
+        includeGitMetadata: Bool
+    ) -> SessionPanelSnapshot? {
         guard let panel = panels[panelId] else { return nil }
 
         let panelTitle = panelTitle(panelId: panelId)
@@ -444,9 +454,11 @@ extension Workspace {
         let directory = panelDirectories[panelId]
         let isPinned = pinnedPanelIds.contains(panelId)
         let isManuallyUnread = manualUnreadPanelIds.contains(panelId)
-        let branchSnapshot = panelGitBranches[panelId].map {
-            SessionGitBranchSnapshot(branch: $0.branch, isDirty: $0.isDirty)
-        }
+        let branchSnapshot = includeGitMetadata
+            ? panelGitBranches[panelId].map {
+                SessionGitBranchSnapshot(branch: $0.branch, isDirty: $0.isDirty)
+            }
+            : nil
         let listeningPorts: [Int]
         if remoteDetectedSurfaceIds.contains(panelId) || isRemoteTerminalSurface(panelId) {
             listeningPorts = []
@@ -6495,7 +6507,12 @@ final class Workspace: Identifiable, ObservableObject {
     @Published var customDescription: String?
     @Published var isPinned: Bool = false
     @Published var customColor: String?  // hex string, e.g. "#C0392B"
-    @Published var gitMetadataWatcherDisabled: Bool = false
+    @Published var gitMetadataWatcherDisabled: Bool = false {
+        didSet {
+            guard gitMetadataWatcherDisabled, gitMetadataWatcherDisabled != oldValue else { return }
+            clearCachedSidebarGitMetadata()
+        }
+    }
     @Published var currentDirectory: String
     private(set) var preferredBrowserProfileID: UUID?
 
@@ -6623,6 +6640,21 @@ final class Workspace: Identifiable, ObservableObject {
     /// Used for stale-session detection: if the PID is dead, the status entry is cleared.
     var agentPIDs: [String: pid_t] = [:]
     private var restoredTerminalScrollbackByPanelId: [UUID: String] = [:]
+
+    private func clearCachedSidebarGitMetadata() {
+        if gitBranch != nil {
+            gitBranch = nil
+        }
+        if !panelGitBranches.isEmpty {
+            panelGitBranches.removeAll()
+        }
+        if pullRequest != nil {
+            pullRequest = nil
+        }
+        if !panelPullRequests.isEmpty {
+            panelPullRequests.removeAll()
+        }
+    }
 
     private func sidebarObservationSignal<Value: Equatable>(
         _ publisher: Published<Value>.Publisher

@@ -263,6 +263,7 @@ private final class WorkspaceGitEventWatcher {
     private let repositoryInfo: WorkspaceGitRepositoryInfo
     private let queue: DispatchQueue
     private let onChange: ([String]) -> Void
+    private let stateLock = NSLock()
     private var stream: FSEventStreamRef?
     private var debounceTimer: DispatchSourceTimer?
     private var pendingPaths: Set<String> = []
@@ -282,7 +283,9 @@ private final class WorkspaceGitEventWatcher {
     }
 
     var isActive: Bool {
-        stream != nil
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return stream != nil
     }
 
     deinit {
@@ -290,15 +293,23 @@ private final class WorkspaceGitEventWatcher {
     }
 
     func invalidate() {
+        let debounceTimer: DispatchSourceTimer?
+        let stream: FSEventStreamRef?
+        stateLock.lock()
+        debounceTimer = self.debounceTimer
+        self.debounceTimer = nil
+        stream = self.stream
+        self.stream = nil
+        pendingPaths.removeAll(keepingCapacity: false)
+        stateLock.unlock()
+
         debounceTimer?.setEventHandler {}
         debounceTimer?.cancel()
-        debounceTimer = nil
 
         guard let stream else { return }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
-        self.stream = nil
     }
 
     private func start() {
@@ -342,12 +353,16 @@ private final class WorkspaceGitEventWatcher {
             return
         }
 
+        stateLock.lock()
         self.stream = stream
+        stateLock.unlock()
         FSEventStreamSetDispatchQueue(stream, queue)
         guard FSEventStreamStart(stream) else {
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
+            stateLock.lock()
             self.stream = nil
+            stateLock.unlock()
             startFailureReason = "startFailed"
             return
         }
@@ -361,26 +376,34 @@ private final class WorkspaceGitEventWatcher {
         }
 
         guard !relevantPaths.isEmpty else { return }
+        stateLock.lock()
         pendingPaths.formUnion(relevantPaths)
+        stateLock.unlock()
         scheduleDebounce()
     }
 
     private func scheduleDebounce() {
-        debounceTimer?.setEventHandler {}
-        debounceTimer?.cancel()
-
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + Self.debounceDelay, repeating: .never)
         timer.setEventHandler { [weak self] in
             self?.flushPendingPaths()
         }
+        let previousTimer: DispatchSourceTimer?
+        stateLock.lock()
+        previousTimer = debounceTimer
         debounceTimer = timer
+        stateLock.unlock()
+        previousTimer?.setEventHandler {}
+        previousTimer?.cancel()
         timer.resume()
     }
 
     private func flushPendingPaths() {
+        stateLock.lock()
         let paths = pendingPaths.sorted()
         pendingPaths.removeAll(keepingCapacity: true)
+        debounceTimer = nil
+        stateLock.unlock()
         guard !paths.isEmpty else { return }
         onChange(paths)
     }
@@ -1529,7 +1552,8 @@ class TabManager: ObservableObject {
         for workspace in tabs {
             scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
                 in: workspace,
-                reason: reason
+                reason: reason,
+                delays: Self.initialWorkspaceGitProbeDelays
             )
         }
     }
@@ -5173,7 +5197,8 @@ class TabManager: ObservableObject {
             if !disabled {
                 scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
                     in: workspace,
-                    reason: "workspaceSettingChanged"
+                    reason: "workspaceSettingChanged",
+                    delays: Self.initialWorkspaceGitProbeDelays
                 )
             }
         }
@@ -5429,6 +5454,7 @@ class TabManager: ObservableObject {
 
     /// Attach an existing workspace to this window.
     func attachWorkspace(_ workspace: Workspace, at index: Int? = nil, select: Bool = true) {
+        clearWorkspaceGitProbes(workspaceId: workspace.id)
         workspace.owningTabManager = self
         wireClosedBrowserTracking(for: workspace)
         let insertIndex: Int = {
@@ -5442,7 +5468,8 @@ class TabManager: ObservableObject {
         if isWorkspaceGitMetadataWatcherEnabled(for: workspace) {
             scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
                 in: workspace,
-                reason: "workspaceAttached"
+                reason: "workspaceAttached",
+                delays: Self.initialWorkspaceGitProbeDelays
             )
         } else {
             clearWorkspacePullRequestTracking(workspaceId: workspace.id)
