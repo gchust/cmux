@@ -4,27 +4,30 @@ const json_rpc = @import("json_rpc.zig");
 const rpc_client = @import("rpc_client.zig");
 const tty_raw = @import("tty_raw.zig");
 
-const ReadOutcome = union(enum) {
-    timeout,
-    data: struct {
-        payload: []u8,
-        next_offset: u64,
-        eof: bool,
-    },
-};
-
 const Size = struct {
     cols: u16,
     rows: u16,
 };
 
 const default_size = Size{ .cols = 80, .rows = 24 };
-const idle_read_timeout_ms: i32 = 2;
+// Idle wake interval. Used as a fallback to notice tty resizes while idle.
+// Pure event-driven wakeups would require SIGWINCH self-pipe; this keeps CPU
+// at ~0% while still picking up size changes within a few hundred ms.
+const idle_poll_timeout_ms: i32 = 250;
 
 const InputPlan = struct {
     write_len: usize,
     next_pending_len: usize,
     detach: bool,
+};
+
+const SubscribeSnapshot = struct {
+    data: []u8,
+    eof: bool,
+};
+
+const FrameOutcome = struct {
+    eof: bool = false,
 };
 
 pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, session_name: []const u8, stderr: anytype) !u8 {
@@ -55,13 +58,31 @@ pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, session_name: []co
     defer guard.deinit();
     defer detachSession(&client, session_name, attachment_id, stderr) catch {};
 
+    var pending_output: std.ArrayList(u8) = .empty;
+    defer pending_output.deinit(alloc);
+
+    // Subscribe with no offset → snapshot is empty (start from current next_offset).
+    const snapshot = try subscribeTerminal(alloc, &client, session_name, stderr);
+    defer alloc.free(snapshot.data);
+    if (snapshot.data.len > 0) {
+        try pending_output.appendSlice(alloc, snapshot.data);
+    }
+    try flushPendingOutput(stdout_file.handle, &pending_output, &trace, session_name);
+    if (snapshot.eof) return 0;
+
+    // Take ownership of the socket fd; rpc_client.Client still owns close on
+    // deinit, but we drive reads/writes directly from here on out so we can
+    // multiplex with stdin via poll().
+    const sock_fd = client.file.?.handle;
+
+    var request_id: u64 = 100;
     var last_size = size;
-    var offset: u64 = 0;
     var pending_detach: [tty_raw.max_detach_prefix_bytes]u8 = undefined;
     var pending_detach_len: usize = 0;
     var input_buf: [4096 + tty_raw.max_detach_prefix_bytes]u8 = undefined;
-    var pending_output: std.ArrayList(u8) = .empty;
-    defer pending_output.deinit(alloc);
+    var read_accum: std.ArrayList(u8) = .empty;
+    defer read_accum.deinit(alloc);
+    var read_buf: [16 * 1024]u8 = undefined;
 
     while (true) {
         const desired_size = currentAttachSizeWithTrace(last_size, &trace);
@@ -74,53 +95,172 @@ pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, session_name: []co
                 .rows = desired_size.rows,
                 .detail = "client observed tty resize",
             });
-            try resizeSession(&client, session_name, attachment_id, desired_size.cols, desired_size.rows, stderr);
+            request_id += 1;
+            try sendResize(alloc, sock_fd, request_id, session_name, attachment_id, desired_size.cols, desired_size.rows);
             last_size = desired_size;
         }
 
         try flushPendingOutput(stdout_file.handle, &pending_output, &trace, session_name);
 
-        if (try stdinReady(stdin_fd)) {
+        var poll_fds = [_]std.posix.pollfd{
+            .{ .fd = stdin_fd, .events = std.posix.POLL.IN, .revents = 0 },
+            .{ .fd = sock_fd, .events = std.posix.POLL.IN, .revents = 0 },
+        };
+        const timeout_ms: i32 = if (pending_output.items.len > 0) 0 else idle_poll_timeout_ms;
+        _ = try std.posix.poll(&poll_fds, timeout_ms);
+
+        const sock_revents = poll_fds[1].revents;
+        if (sock_revents & std.posix.POLL.IN != 0) {
+            const n = std.posix.read(sock_fd, &read_buf) catch |err| switch (err) {
+                error.WouldBlock => 0,
+                else => return err,
+            };
+            if (n == 0) return 0; // socket closed
+            try read_accum.appendSlice(alloc, read_buf[0..n]);
+            var saw_eof = false;
+            while (std.mem.indexOfScalar(u8, read_accum.items, '\n')) |nl| {
+                if (handleSocketLine(alloc, read_accum.items[0..nl], &pending_output, stderr)) |outcome| {
+                    if (outcome.eof) saw_eof = true;
+                } else |err| {
+                    try stderr.print("cmux: bad daemon frame: {s}\n", .{@errorName(err)});
+                    try stderr.flush();
+                }
+                const remaining = read_accum.items[nl + 1 ..];
+                std.mem.copyForwards(u8, read_accum.items[0..remaining.len], remaining);
+                read_accum.items.len = remaining.len;
+            }
+            try flushPendingOutput(stdout_file.handle, &pending_output, &trace, session_name);
+            if (saw_eof) return 0;
+        } else if ((sock_revents & (std.posix.POLL.HUP | std.posix.POLL.ERR | std.posix.POLL.NVAL)) != 0) {
+            return 0;
+        }
+
+        const stdin_revents = poll_fds[0].revents;
+        if (stdin_revents & std.posix.POLL.IN != 0) {
             pending_detach_len = try drainAndWriteInput(
-                &client,
+                alloc,
+                sock_fd,
+                &request_id,
                 session_name,
                 stdin_fd,
                 &input_buf,
                 &pending_detach,
                 pending_detach_len,
-                stderr,
                 &trace,
             ) orelse return 0;
-            continue;
-        }
-
-        if (pending_output.items.len > 0) {
-            std.Thread.yield() catch {};
-            continue;
-        }
-
-        const read_started_ms = std.time.milliTimestamp();
-        switch (try readTerminal(&client, session_name, offset, idle_read_timeout_ms, stderr)) {
-            .timeout => std.Thread.yield() catch {},
-            .data => |read| {
-                defer alloc.free(read.payload);
-                if (read.payload.len > 0) {
-                    try pending_output.appendSlice(alloc, read.payload);
-                    try flushPendingOutput(stdout_file.handle, &pending_output, &trace, session_name);
-                }
-                offset = read.next_offset;
-                try trace.log("read_result", .{
-                    .hypothesis_id = "h1",
-                    .session_id = session_name,
-                    .attachment_id = attachment_id,
-                    .elapsed_ms = std.time.milliTimestamp() - read_started_ms,
-                    .payload_len = read.payload.len,
-                    .detail = if (read.eof) "data_eof" else "data",
-                });
-                if (read.eof) return 0;
-            },
+        } else if ((stdin_revents & (std.posix.POLL.HUP | std.posix.POLL.ERR | std.posix.POLL.NVAL)) != 0) {
+            return 0;
         }
     }
+}
+
+fn handleSocketLine(
+    alloc: std.mem.Allocator,
+    line: []const u8,
+    pending_output: *std.ArrayList(u8),
+    stderr: anytype,
+) !FrameOutcome {
+    if (line.len == 0) return .{};
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, line, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidResponse;
+    const obj = parsed.value.object;
+
+    if (obj.get("event")) |event_val| {
+        if (event_val == .string and std.mem.eql(u8, event_val.string, "terminal.output")) {
+            const data_val = obj.get("data") orelse return .{};
+            if (data_val != .string) return error.InvalidResponse;
+            const encoded = data_val.string;
+            const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(encoded) catch return error.InvalidResponse;
+            if (decoded_len > 0) {
+                const decoded = try alloc.alloc(u8, decoded_len);
+                defer alloc.free(decoded);
+                std.base64.standard.Decoder.decode(decoded, encoded) catch return error.InvalidResponse;
+                try pending_output.appendSlice(alloc, decoded);
+            }
+            const eof = if (obj.get("eof")) |v| (v == .bool and v.bool) else false;
+            return .{ .eof = eof };
+        }
+        // Unknown event — ignore. Notifications field intentionally not surfaced
+        // by the CLI.
+        return .{};
+    }
+
+    // Response to one of our async writes (terminal.write / session.resize).
+    if (obj.get("ok")) |ok_val| {
+        if (ok_val == .bool and !ok_val.bool) {
+            if (obj.get("error")) |err_obj| {
+                if (err_obj == .object) {
+                    if (err_obj.object.get("message")) |m| {
+                        if (m == .string) {
+                            try stderr.print("cmux: {s}\n", .{m.string});
+                            try stderr.flush();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return .{};
+}
+
+fn sendRequestLine(alloc: std.mem.Allocator, fd: std.posix.fd_t, request: anytype) !void {
+    const json = try json_rpc.encodeResponse(alloc, request);
+    defer alloc.free(json);
+    var iov = [_]std.posix.iovec_const{
+        .{ .base = json.ptr, .len = json.len },
+        .{ .base = "\n", .len = 1 },
+    };
+    var off: usize = 0;
+    const total = json.len + 1;
+    while (off < total) {
+        const n = try std.posix.writev(fd, iov[0..]);
+        if (n == 0) return error.BrokenPipe;
+        off += n;
+        // Adjust iov for partial writes.
+        var consumed = n;
+        var i: usize = 0;
+        while (consumed > 0 and i < iov.len) {
+            if (iov[i].len <= consumed) {
+                consumed -= iov[i].len;
+                iov[i].len = 0;
+                i += 1;
+            } else {
+                iov[i].base = iov[i].base + consumed;
+                iov[i].len -= consumed;
+                consumed = 0;
+            }
+        }
+        if (off >= total) break;
+    }
+}
+
+fn sendWrite(alloc: std.mem.Allocator, fd: std.posix.fd_t, id: u64, session_name: []const u8, data: []const u8) !void {
+    const enc_len = std.base64.standard.Encoder.calcSize(data.len);
+    const enc = try alloc.alloc(u8, enc_len);
+    defer alloc.free(enc);
+    _ = std.base64.standard.Encoder.encode(enc, data);
+    try sendRequestLine(alloc, fd, .{
+        .id = id,
+        .method = "terminal.write",
+        .params = .{
+            .session_id = session_name,
+            .data = enc,
+        },
+    });
+}
+
+fn sendResize(alloc: std.mem.Allocator, fd: std.posix.fd_t, id: u64, session_name: []const u8, attachment_id: []const u8, cols: u16, rows: u16) !void {
+    try sendRequestLine(alloc, fd, .{
+        .id = id,
+        .method = "session.resize",
+        .params = .{
+            .session_id = session_name,
+            .attachment_id = attachment_id,
+            .cols = cols,
+            .rows = rows,
+        },
+    });
 }
 
 const NonBlockingFd = struct {
@@ -224,20 +364,6 @@ fn attachSession(client: *rpc_client.Client, session_name: []const u8, attachmen
     response.deinit();
 }
 
-fn resizeSession(client: *rpc_client.Client, session_name: []const u8, attachment_id: []const u8, cols: u16, rows: u16, stderr: anytype) !void {
-    var response = try call(client, .{
-        .id = "1",
-        .method = "session.resize",
-        .params = .{
-            .session_id = session_name,
-            .attachment_id = attachment_id,
-            .cols = cols,
-            .rows = rows,
-        },
-    }, stderr);
-    response.deinit();
-}
-
 fn detachSession(client: *rpc_client.Client, session_name: []const u8, attachment_id: []const u8, stderr: anytype) !void {
     var response = try call(client, .{
         .id = "1",
@@ -250,79 +376,24 @@ fn detachSession(client: *rpc_client.Client, session_name: []const u8, attachmen
     response.deinit();
 }
 
-fn writeTerminal(client: *rpc_client.Client, session_name: []const u8, data: []const u8, stderr: anytype) !void {
-    const encoded_len = std.base64.standard.Encoder.calcSize(data.len);
-    const encoded = try client.alloc.alloc(u8, encoded_len);
-    defer client.alloc.free(encoded);
-    _ = std.base64.standard.Encoder.encode(encoded, data);
-
+fn subscribeTerminal(alloc: std.mem.Allocator, client: *rpc_client.Client, session_name: []const u8, stderr: anytype) !SubscribeSnapshot {
     var response = try call(client, .{
         .id = "1",
-        .method = "terminal.write",
-        .params = .{
-            .session_id = session_name,
-            .data = encoded,
-        },
+        .method = "terminal.subscribe",
+        .params = .{ .session_id = session_name },
     }, stderr);
-    response.deinit();
-}
-
-fn readTerminal(client: *rpc_client.Client, session_name: []const u8, offset: u64, timeout_ms: i32, stderr: anytype) !ReadOutcome {
-    const request_json = try json_rpc.encodeResponse(client.alloc, .{
-        .id = "1",
-        .method = "terminal.read",
-        .params = .{
-            .session_id = session_name,
-            .offset = offset,
-            .max_bytes = 65536,
-            .timeout_ms = timeout_ms,
-        },
-    });
-    defer client.alloc.free(request_json);
-
-    var response = try client.call(request_json);
-    errdefer response.deinit();
-
-    const root = response.value;
-    if (root != .object) return error.InvalidResponse;
-    const ok_value = root.object.get("ok") orelse return error.InvalidResponse;
-    if (ok_value != .bool) return error.InvalidResponse;
-    if (!ok_value.bool) {
-        const err_obj = root.object.get("error") orelse return error.InvalidResponse;
-        if (err_obj != .object) return error.InvalidResponse;
-        const code = err_obj.object.get("code") orelse return error.InvalidResponse;
-        if (code == .string and std.mem.eql(u8, code.string, "deadline_exceeded")) {
-            response.deinit();
-            return .timeout;
-        }
-        const message = err_obj.object.get("message") orelse return error.InvalidResponse;
-        if (message != .string) return error.InvalidResponse;
-        try stderr.print("{s}\n", .{message.string});
-        try stderr.flush();
-        return error.RemoteError;
-    }
-
-    const result = root.object.get("result") orelse return error.InvalidResponse;
+    defer response.deinit();
+    const result = response.value.object.get("result") orelse return error.InvalidResponse;
     if (result != .object) return error.InvalidResponse;
-    const encoded = result.object.get("data") orelse return error.InvalidResponse;
-    const next_offset_value = result.object.get("offset") orelse return error.InvalidResponse;
-    const eof_value = result.object.get("eof") orelse return error.InvalidResponse;
-    if (encoded != .string or eof_value != .bool) return error.InvalidResponse;
-
-    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(encoded.string) catch return error.InvalidResponse;
-    const decoded = try client.alloc.alloc(u8, decoded_len);
-    errdefer client.alloc.free(decoded);
-    std.base64.standard.Decoder.decode(decoded, encoded.string) catch return error.InvalidResponse;
-
-    const next_offset = try u64FromValue(next_offset_value);
-    response.deinit();
-    return .{
-        .data = .{
-            .payload = decoded,
-            .next_offset = next_offset,
-            .eof = eof_value.bool,
-        },
-    };
+    const data_val = result.object.get("data") orelse return error.InvalidResponse;
+    if (data_val != .string) return error.InvalidResponse;
+    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(data_val.string) catch return error.InvalidResponse;
+    const decoded = try alloc.alloc(u8, decoded_len);
+    errdefer alloc.free(decoded);
+    std.base64.standard.Decoder.decode(decoded, data_val.string) catch return error.InvalidResponse;
+    const eof_val = result.object.get("eof");
+    const eof = if (eof_val) |v| (v == .bool and v.bool) else false;
+    return .{ .data = decoded, .eof = eof };
 }
 
 fn statusSize(client: *rpc_client.Client, session_name: []const u8, stderr: anytype) !Size {
@@ -400,15 +471,6 @@ fn probeSize(probe_name: []const u8, fd: std.posix.fd_t, maybe_trace: ?*AttachTr
     return size;
 }
 
-fn stdinReady(fd: std.posix.fd_t) !bool {
-    var poll_fds = [1]std.posix.pollfd{.{
-        .fd = fd,
-        .events = std.posix.POLL.IN,
-        .revents = 0,
-    }};
-    return try std.posix.poll(&poll_fds, 0) > 0;
-}
-
 fn flushPendingOutput(fd: std.posix.fd_t, pending_output: *std.ArrayList(u8), trace: *AttachTrace, session_name: []const u8) !void {
     while (pending_output.items.len > 0) {
         const written = std.posix.write(fd, pending_output.items) catch |err| switch (err) {
@@ -431,13 +493,14 @@ fn flushPendingOutput(fd: std.posix.fd_t, pending_output: *std.ArrayList(u8), tr
 }
 
 fn drainAndWriteInput(
-    client: *rpc_client.Client,
+    alloc: std.mem.Allocator,
+    sock_fd: std.posix.fd_t,
+    request_id: *u64,
     session_name: []const u8,
     stdin_fd: std.posix.fd_t,
     input_buf: *[4096 + tty_raw.max_detach_prefix_bytes]u8,
     pending_detach: *[tty_raw.max_detach_prefix_bytes]u8,
     pending_detach_len: usize,
-    stderr: anytype,
     trace: *AttachTrace,
 ) !?usize {
     if (pending_detach_len > 0) {
@@ -448,7 +511,8 @@ fn drainAndWriteInput(
     if (read_len == 0) {
         if (pending_detach_len > 0) {
             const write_started_ms = std.time.milliTimestamp();
-            try writeTerminal(client, session_name, pending_detach[0..pending_detach_len], stderr);
+            request_id.* += 1;
+            try sendWrite(alloc, sock_fd, request_id.*, session_name, pending_detach[0..pending_detach_len]);
             try trace.log("write_result", .{
                 .hypothesis_id = "h1",
                 .session_id = session_name,
@@ -465,7 +529,8 @@ fn drainAndWriteInput(
     if (plan.detach) {
         if (plan.write_len > 0) {
             const write_started_ms = std.time.milliTimestamp();
-            try writeTerminal(client, session_name, input_buf[0..plan.write_len], stderr);
+            request_id.* += 1;
+            try sendWrite(alloc, sock_fd, request_id.*, session_name, input_buf[0..plan.write_len]);
             try trace.log("write_result", .{
                 .hypothesis_id = "h1",
                 .session_id = session_name,
@@ -479,7 +544,8 @@ fn drainAndWriteInput(
 
     if (plan.write_len > 0) {
         const write_started_ms = std.time.milliTimestamp();
-        try writeTerminal(client, session_name, input_buf[0..plan.write_len], stderr);
+        request_id.* += 1;
+        try sendWrite(alloc, sock_fd, request_id.*, session_name, input_buf[0..plan.write_len]);
         try trace.log("write_result", .{
             .hypothesis_id = "h1",
             .session_id = session_name,
