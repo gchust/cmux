@@ -42,7 +42,7 @@ final class AnchormuxLiveSharingTests: XCTestCase {
         let sessionTransport = TerminalRemoteDaemonSessionTransport(
             client: client,
             command: "printf READY; stty raw -echo -onlcr; exec cat",
-            preferredSessionID: config.sessionID,
+            sharedSessionID: config.sessionID,
             readTimeoutMilliseconds: 100
         )
 
@@ -146,7 +146,7 @@ final class AnchormuxLiveSharingTests: XCTestCase {
         let sessionTransport = TerminalRemoteDaemonSessionTransport(
             client: client,
             command: "printf READY; stty raw -echo -onlcr; exec cat",
-            preferredSessionID: config.sessionID,
+            sharedSessionID: config.sessionID,
             readTimeoutMilliseconds: 100
         )
 

@@ -38,7 +38,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in directSessionTransport },
+            sessionTransportFactory: { _, _, _, _ in directSessionTransport },
             fallbackTransportFactory: { _, _, _, _ in fallbackTransport }
         )
 
@@ -93,7 +93,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in StubTerminalTransport() },
+            sessionTransportFactory: { _, _, _, _ in StubTerminalTransport() },
             fallbackTransportFactory: { _, _, _, _ in fallbackTransport }
         )
         transport.eventHandler = { event in
@@ -152,7 +152,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in StubTerminalTransport() },
+            sessionTransportFactory: { _, _, _, _ in StubTerminalTransport() },
             fallbackTransportFactory: { _, _, _, _ in fallbackTransport }
         )
 
@@ -201,7 +201,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in StubTerminalTransport() },
+            sessionTransportFactory: { _, _, _, _ in StubTerminalTransport() },
             fallbackTransportFactory: { _, _, _, _ in bootstrapTransport }
         )
         transport.eventHandler = { event in
@@ -253,7 +253,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in StubTerminalTransport() },
+            sessionTransportFactory: { _, _, _, _ in StubTerminalTransport() },
             fallbackTransportFactory: { _, _, _, _ in fallbackTransport }
         )
 
@@ -321,7 +321,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in directSessionTransport },
+            sessionTransportFactory: { _, _, _, _ in directSessionTransport },
             fallbackTransportFactory: { _, _, _, _ in fallbackTransport }
         )
 
@@ -370,7 +370,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in StubTerminalTransport() },
+            sessionTransportFactory: { _, _, _, _ in StubTerminalTransport() },
             fallbackTransportFactory: { _, _, _, _ in fallbackTransport }
         )
 
@@ -412,7 +412,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in StubTerminalTransport() },
+            sessionTransportFactory: { _, _, _, _ in StubTerminalTransport() },
             fallbackTransportFactory: { _, _, _, _ in fallbackTransport }
         )
 
@@ -474,7 +474,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             resumeState: initialResumeState,
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, resumeState in
+            sessionTransportFactory: { _, _, _, resumeState in
                 resumeStateRecorder.set(resumeState)
                 return directSessionTransport
             },
@@ -534,7 +534,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
             sessionName: "cmux-dev",
             ticketService: ticketService,
             directClient: directClient,
-            sessionTransportFactory: { _, _, _ in directSessionTransport },
+            sessionTransportFactory: { _, _, _, _ in directSessionTransport },
             fallbackTransportFactory: { _, _, _, _ in StubTerminalTransport() }
         )
 
