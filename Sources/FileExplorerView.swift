@@ -10,9 +10,10 @@ import SwiftUI
 struct FileExplorerPanelView: NSViewRepresentable {
     @ObservedObject var store: FileExplorerStore
     @ObservedObject var state: FileExplorerState
+    var onFileOpen: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(store: store, state: state)
+        Coordinator(store: store, state: state, onFileOpen: onFileOpen)
     }
 
     func makeNSView(context: Context) -> FileExplorerContainerView {
@@ -24,6 +25,7 @@ struct FileExplorerPanelView: NSViewRepresentable {
     func updateNSView(_ container: FileExplorerContainerView, context: Context) {
         context.coordinator.store = store
         context.coordinator.state = state
+        context.coordinator.onFileOpen = onFileOpen
         container.updateHeader(store: store)
         context.coordinator.reloadIfNeeded()
     }
@@ -33,15 +35,17 @@ struct FileExplorerPanelView: NSViewRepresentable {
     final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
         var store: FileExplorerStore
         var state: FileExplorerState
+        var onFileOpen: ((String) -> Void)?
         weak var containerView: FileExplorerContainerView?
         weak var outlineView: NSOutlineView?
         private var lastRootNodeCount: Int = -1
         private var observationCancellable: AnyCancellable?
         private var styleObserver: Any?
 
-        init(store: FileExplorerStore, state: FileExplorerState) {
+        init(store: FileExplorerStore, state: FileExplorerState, onFileOpen: ((String) -> Void)?) {
             self.store = store
             self.state = state
+            self.onFileOpen = onFileOpen
             super.init()
             observeStore()
             styleObserver = NotificationCenter.default.addObserver(
@@ -205,6 +209,16 @@ struct FileExplorerPanelView: NSViewRepresentable {
             FileExplorerStyle.current.rowHeight
         }
 
+        // MARK: - Double-click to open file
+
+        @objc func outlineViewDoubleClicked(_ sender: NSOutlineView) {
+            let clickedRow = sender.clickedRow
+            guard clickedRow >= 0,
+                  let node = sender.item(atRow: clickedRow) as? FileExplorerNode,
+                  !node.isDirectory else { return }
+            onFileOpen?(node.path)
+        }
+
         // MARK: - Drag-to-Terminal
 
         func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> (any NSPasteboardWriting)? {
@@ -356,6 +370,8 @@ final class FileExplorerContainerView: NSView {
 
         outlineView.dataSource = coordinator
         outlineView.delegate = coordinator
+        outlineView.target = coordinator
+        outlineView.doubleAction = #selector(FileExplorerPanelView.Coordinator.outlineViewDoubleClicked(_:))
         coordinator.outlineView = outlineView
 
         // Context menu
