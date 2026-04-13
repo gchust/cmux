@@ -242,6 +242,8 @@ struct SessionMarkdownPanelSnapshot: Codable, Sendable {
 
 struct SessionEditorPanelSnapshot: Codable, Sendable {
     var filePath: String
+    var cursorLocation: Int?
+    var cursorLength: Int?
 }
 
 struct SessionPanelSnapshot: Codable, Sendable {

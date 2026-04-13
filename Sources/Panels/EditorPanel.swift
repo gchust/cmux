@@ -36,6 +36,11 @@ final class EditorPanel: Panel, ObservableObject {
     /// Weak reference to the AppKit text view so focus() can make it first responder.
     weak var textView: NSTextView?
 
+    /// Last known cursor/selection state. Persisted via session snapshot and
+    /// restored into the text view when it is created.
+    var cursorLocation: Int = 0
+    var cursorLength: Int = 0
+
     /// Encoding detected when the file was loaded. Preserved on save so legacy-encoded
     /// files are not silently re-encoded to UTF-8.
     private var originalEncoding: String.Encoding = .utf8

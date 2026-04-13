@@ -176,6 +176,15 @@ private struct EditorTextViewRepresentable: NSViewRepresentable {
         textView.editorPanel = panel
         textView.onRequestPanelFocus = onRequestPanelFocus
 
+        // Restore persisted cursor position, clamped to the current content length.
+        let totalLength = (textView.string as NSString).length
+        let location = min(max(panel.cursorLocation, 0), totalLength)
+        let length = min(max(panel.cursorLength, 0), totalLength - location)
+        textView.selectedRange = NSRange(location: location, length: length)
+        DispatchQueue.main.async { [weak textView] in
+            textView?.scrollRangeToVisible(NSRange(location: location, length: 0))
+        }
+
         scrollView.documentView = textView
         context.coordinator.textView = textView
         panel.textView = textView
@@ -260,6 +269,13 @@ private struct EditorTextViewRepresentable: NSViewRepresentable {
                 return false
             }
             return true
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            let range = textView.selectedRange()
+            panel.cursorLocation = range.location
+            panel.cursorLength = range.length
         }
     }
 }

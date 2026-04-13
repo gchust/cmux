@@ -500,7 +500,11 @@ extension Workspace {
             terminalSnapshot = nil
             browserSnapshot = nil
             markdownSnapshot = nil
-            editorSnapshot = SessionEditorPanelSnapshot(filePath: edPanel.filePath)
+            editorSnapshot = SessionEditorPanelSnapshot(
+                filePath: edPanel.filePath,
+                cursorLocation: edPanel.cursorLocation,
+                cursorLength: edPanel.cursorLength
+            )
         }
 
         return SessionPanelSnapshot(
@@ -701,6 +705,8 @@ extension Workspace {
                   ) else {
                 return nil
             }
+            if let loc = snapshot.editor?.cursorLocation { edPanel.cursorLocation = loc }
+            if let len = snapshot.editor?.cursorLength { edPanel.cursorLength = len }
             applySessionPanelMetadata(snapshot, toPanelId: edPanel.id)
             return edPanel.id
         }
