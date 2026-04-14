@@ -82,6 +82,11 @@ const RuntimeSession = struct {
     /// Serializes pump-thread access to `pty`/`terminal` against any
     /// foreground caller (read/write/history/resize/deinit).
     lock: std.Thread.Mutex = .{},
+    /// Published to the pump via `pty_pump.Entry.in_flight`. The pump
+    /// bumps this while it holds pointers into this RuntimeSession and
+    /// `unregister` spin-waits for it to hit zero before returning, so
+    /// `closeSession` can safely free the struct after unregister.
+    pump_in_flight: std.atomic.Value(u32) = .init(0),
     /// True when the pump observed new PTY output while no client was
     /// subscribed. Cleared on terminal.subscribe or session.markRead.
     has_unread_output: std.atomic.Value(bool) = .init(false),
@@ -453,6 +458,7 @@ pub const Service = struct {
                 .terminal = &runtime.terminal,
                 .lock = &runtime.lock,
                 .session_id = opened.session_id,
+                .in_flight = &runtime.pump_in_flight,
             };
             pump.register(runtime.pty.master_fd, entry) catch |err| {
                 std.log.warn("session_service: pump.register failed: {s}", .{@errorName(err)});
@@ -1653,6 +1659,7 @@ test "terminal.output carries notifications:{bell:true} once then null" {
         .terminal = &runtime.terminal,
         .lock = &runtime.lock,
         .session_id = "notif-smoke",
+        .in_flight = &runtime.pump_in_flight,
     };
 
     // Inject a BEL + printable byte, so the push has both a notification and new bytes.
@@ -1902,6 +1909,7 @@ test "daemon.configure_notifications + bell with no subscribers POSTs to endpoin
         .terminal = &runtime.terminal,
         .lock = &runtime.lock,
         .session_id = "remote-smoke",
+        .in_flight = &runtime.pump_in_flight,
     };
     service.deliverTerminalPushes(entry);
 

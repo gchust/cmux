@@ -21,6 +21,15 @@ pub const Entry = struct {
     /// race-free.
     lock: *std.Thread.Mutex,
     session_id: []const u8,
+    /// Per-entry reference count the pump bumps while it holds this entry's
+    /// pointers in its local copy. `unregister` removes the entry from the
+    /// map and then spin-waits for this counter to reach zero before
+    /// returning, so callers can safely free the owning RuntimeSession
+    /// without the pump racing ahead with stale `pty` / `terminal` /
+    /// `lock` / `session_id` pointers. The owner of this pointer (the
+    /// caller of `register`) must keep the atomic itself alive until
+    /// `unregister` has returned.
+    in_flight: *std.atomic.Value(u32),
 };
 
 pub const Pump = if (supported) KqueuePump else StubPump;
@@ -54,17 +63,6 @@ const KqueuePump = struct {
     shutdown: std.atomic.Value(bool) = .init(false),
     notify_fn: ?NotifyFn = null,
     notify_ctx: ?*anyopaque = null,
-
-    /// Held by the pump thread while it is inside the per-event processing
-    /// body (dereferencing `entry.pty` / `entry.terminal`). Callers of
-    /// `unregister` acquire this immediately after removing the entry from
-    /// the map so they are guaranteed the pump is not currently touching
-    /// the just-removed entry's backing memory before returning. This
-    /// closes a UAF race where `closeSession` would deinit+destroy a
-    /// `RuntimeSession` while the pump thread still had `entry.pty` /
-    /// `entry.terminal` pointers into it from an iteration that started
-    /// before the unregister ran.
-    processing_mutex: std.Thread.Mutex = .{},
 
     pub fn init(alloc: std.mem.Allocator) !KqueuePump {
         const kq = try std.posix.kqueue();
@@ -120,8 +118,8 @@ const KqueuePump = struct {
 
     pub fn unregister(self: *KqueuePump, fd: std.posix.fd_t) void {
         self.map_mutex.lock();
-        const removed = self.entries.remove(fd);
-        if (removed) {
+        const removed = self.entries.fetchRemove(fd);
+        if (removed != null) {
             var changes = [_]std.posix.Kevent{.{
                 .ident = @intCast(fd),
                 .filter = readFilter(),
@@ -134,15 +132,15 @@ const KqueuePump = struct {
         }
         self.map_mutex.unlock();
 
-        // Barrier: if the pump is mid-iteration on this (or any other)
-        // entry, wait for it to finish that iteration before returning.
-        // After this point the caller can safely free the RuntimeSession
-        // backing the removed entry — the pump cannot be holding any of
-        // its pointers because it's either blocked at kevent() or about
-        // to look up the next entry from the now-updated map.
-        if (removed) {
-            self.processing_mutex.lock();
-            self.processing_mutex.unlock();
+        // Per-entry quiescence: wait for any pump iteration that's still
+        // holding a copy of this entry's pointers to finish. After this
+        // returns the caller can safely free the backing RuntimeSession.
+        // No new iterations can start referencing this fd because we've
+        // already removed it from the map (entries.get(fd) returns null).
+        if (removed) |kv| {
+            while (kv.value.in_flight.load(.seq_cst) > 0) {
+                std.atomic.spinLoopHint();
+            }
         }
     }
 
@@ -160,11 +158,6 @@ const KqueuePump = struct {
             };
             if (self.shutdown.load(.seq_cst)) return;
 
-            // Held across the whole per-event batch so `unregister` can
-            // synchronize on it — see `unregister` for the UAF rationale.
-            self.processing_mutex.lock();
-            defer self.processing_mutex.unlock();
-
             for (events[0..n]) |ev| {
                 if (ev.filter == userFilter()) continue;
                 if (ev.filter != readFilter()) continue;
@@ -172,9 +165,16 @@ const KqueuePump = struct {
                 const fd: std.posix.fd_t = @intCast(ev.ident);
                 self.map_mutex.lock();
                 const maybe_entry = self.entries.get(fd);
+                // Bump the entry's in_flight counter while the map is
+                // still locked so concurrent `unregister` (which does
+                // `fetchRemove` under the same lock) can't observe a
+                // stale 0 and free the backing RuntimeSession before
+                // we're done using its pointers.
+                if (maybe_entry) |e| _ = e.in_flight.fetchAdd(1, .seq_cst);
                 self.map_mutex.unlock();
 
                 const entry = maybe_entry orelse continue;
+                defer _ = entry.in_flight.fetchSub(1, .seq_cst);
 
                 entry.lock.lock();
                 entry.pty.pump(entry.terminal) catch |err| {
