@@ -287,9 +287,7 @@ private final class EditorNSTextView: NSTextView {
     var onRequestPanelFocus: (() -> Void)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Cmd+S to save
-        if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers == "s" {
+        if KeyboardShortcutSettings.shortcut(for: .saveEditorFile).matches(event: event) {
             editorPanel?.save()
             return true
         }

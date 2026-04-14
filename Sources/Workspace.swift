@@ -11344,7 +11344,10 @@ extension Workspace: BonsplitDelegate {
     /// auto-creating a replacement terminal.
     private func finalizeEditorCloseAfterDialog(tabId: TabID) {
         if shouldCloseWorkspaceOnLastSurface(for: tabId) {
-            owningTabManager?.closeWorkspaceWithConfirmation(self)
+            let manager = owningTabManager
+                ?? AppDelegate.shared?.tabManagerFor(tabId: id)
+                ?? AppDelegate.shared?.tabManager
+            manager?.closeWorkspaceWithConfirmation(self)
         } else {
             forceCloseTabIds.insert(tabId)
             bonsplitController.closeTab(tabId)

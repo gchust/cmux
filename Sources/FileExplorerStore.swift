@@ -665,9 +665,12 @@ final class FileExplorerStore: ObservableObject {
             nodesByPath.removeValue(forKey: old.path)
         }
 
-        let oldOrder = existing.map(\.path)
-        let newOrder = merged.map(\.path)
-        if oldOrder != newOrder {
+        // Write merged back when either the order changed or any entry was
+        // replaced with a fresh node (e.g., a path flipped from file → directory
+        // or vice versa, which allocates a new FileExplorerNode above).
+        let structurallyChanged = existing.count != merged.count
+            || zip(existing, merged).contains { $0 !== $1 }
+        if structurallyChanged {
             if let parent {
                 parent.children = merged
             } else {

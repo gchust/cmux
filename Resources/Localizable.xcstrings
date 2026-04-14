@@ -87865,6 +87865,29 @@
           }
         }
       }
+    },
+    "shortcut.saveEditorFile.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save Editor File"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エディタでファイルを保存"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зберегти файл редактора"
+          }
+        }
+      }
     }
   }
 }
