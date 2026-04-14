@@ -10432,6 +10432,9 @@ final class Workspace: Identifiable, ObservableObject {
                panelNeedsConfirmClose(panelId: panelId, fallbackNeedsConfirmClose: terminalPanel.needsConfirmClose()) {
                 return true
             }
+            if let editorPanel = panel as? EditorPanel, editorPanel.isDirty {
+                return true
+            }
         }
         return false
     }
@@ -11335,6 +11338,19 @@ extension Workspace: BonsplitDelegate {
         }
     }
 
+    /// Complete a tab close after the editor save/discard dialog. If the editor
+    /// was the last surface in this workspace, route through the workspace-close
+    /// path so the workspace (or window) closes as users expect instead of
+    /// auto-creating a replacement terminal.
+    private func finalizeEditorCloseAfterDialog(tabId: TabID) {
+        if shouldCloseWorkspaceOnLastSurface(for: tabId) {
+            owningTabManager?.closeWorkspaceWithConfirmation(self)
+        } else {
+            forceCloseTabIds.insert(tabId)
+            bonsplitController.closeTab(tabId)
+        }
+    }
+
     private func showEditorSaveFailureAlert(for editorPanel: EditorPanel) {
         let alert = NSAlert()
         let filename = (editorPanel.filePath as NSString).lastPathComponent
@@ -11841,12 +11857,10 @@ extension Workspace: BonsplitDelegate {
                     case .cancel:
                         return
                     case .discard:
-                        self.forceCloseTabIds.insert(tabId)
-                        self.bonsplitController.closeTab(tabId)
+                        self.finalizeEditorCloseAfterDialog(tabId: tabId)
                     case .save:
                         if stillEditor.save() {
-                            self.forceCloseTabIds.insert(tabId)
-                            self.bonsplitController.closeTab(tabId)
+                            self.finalizeEditorCloseAfterDialog(tabId: tabId)
                         } else {
                             self.showEditorSaveFailureAlert(for: stillEditor)
                         }

@@ -248,9 +248,12 @@ final class EditorPanel: Panel, ObservableObject {
                     self.loadFileContent()
                 }
                 self.startFileWatcher()
-                // Only consider the reattach successful once a watcher is actually
-                // installed and the load didn't fail; otherwise keep retrying.
-                if self.fileWatchSource == nil || self.isFileUnavailable {
+                // Reattach is done once a watcher is installed. When the buffer
+                // is dirty we intentionally skipped loadFileContent(), so
+                // isFileUnavailable may still be stale from before — don't treat
+                // that as a retry signal. Only keep retrying if the watcher
+                // failed to install, or we tried to load and it genuinely failed.
+                if self.fileWatchSource == nil || (!self.isDirty && self.isFileUnavailable) {
                     self.scheduleReattach()
                 } else {
                     self.isFileUnavailable = false
