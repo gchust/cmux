@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import UserNotifications
 import Bonsplit
@@ -666,6 +667,84 @@ struct TerminalNotification: Identifiable, Hashable {
     var isRead: Bool
 }
 
+struct TerminalNotificationWorkspaceSnapshot: Equatable, Sendable {
+    let tabId: UUID?
+    let unreadCount: Int
+    let hasRead: Bool
+    let visibleSurfaceIds: Set<UUID>
+    let latestNotification: TerminalNotification?
+    let focusedReadIndicatorSurfaceId: UUID?
+
+    static let empty = TerminalNotificationWorkspaceSnapshot(
+        tabId: nil,
+        unreadCount: 0,
+        hasRead: false,
+        visibleSurfaceIds: [],
+        latestNotification: nil,
+        focusedReadIndicatorSurfaceId: nil
+    )
+
+    var hasUnreadNotifications: Bool {
+        unreadCount > 0
+    }
+
+    var hasReadNotifications: Bool {
+        hasRead
+    }
+
+    func hasVisibleNotificationIndicator(surfaceId: UUID?) -> Bool {
+        guard let surfaceId else { return false }
+        return visibleSurfaceIds.contains(surfaceId)
+    }
+}
+
+typealias WorkspaceNotificationPresentation = TerminalNotificationWorkspaceSnapshot
+
+@MainActor
+final class WorkspaceNotificationPresentationStore: ObservableObject {
+    @Published private(set) var presentation: WorkspaceNotificationPresentation
+
+    private var cancellable: AnyCancellable?
+
+    init(
+        tabId: UUID,
+        notificationStore: TerminalNotificationStore = .shared
+    ) {
+        self.presentation = notificationStore.presentation(forTabId: tabId)
+        cancellable = notificationStore.presentationPublisher(forTabId: tabId)
+            .sink { [weak self] presentation in
+                guard let self, self.presentation != presentation else { return }
+                self.presentation = presentation
+            }
+    }
+}
+
+@MainActor
+final class WorkspaceNotificationPresentationStoreCache: ObservableObject {
+    private let notificationStore: TerminalNotificationStore
+    private var stores: [UUID: WorkspaceNotificationPresentationStore] = [:]
+
+    init(notificationStore: TerminalNotificationStore = .shared) {
+        self.notificationStore = notificationStore
+    }
+
+    func store(for tabId: UUID) -> WorkspaceNotificationPresentationStore {
+        if let existing = stores[tabId] {
+            return existing
+        }
+        let store = WorkspaceNotificationPresentationStore(
+            tabId: tabId,
+            notificationStore: notificationStore
+        )
+        stores[tabId] = store
+        return store
+    }
+
+    func removeStaleStores(keepingTabIds tabIds: Set<UUID>) {
+        stores = stores.filter { tabIds.contains($0.key) }
+    }
+}
+
 @MainActor
 final class TerminalNotificationStore: ObservableObject {
     private struct TabSurfaceKey: Hashable {
@@ -894,6 +973,50 @@ final class TerminalNotificationStore: ObservableObject {
 
     func focusedReadIndicatorSurfaceId(forTabId tabId: UUID) -> UUID? {
         focusedReadIndicatorByTabId[tabId]
+    }
+
+    func presentation(forTabId tabId: UUID) -> WorkspaceNotificationPresentation {
+        workspaceSnapshot(forTabId: tabId)
+    }
+
+    func workspaceSnapshot(forTabId tabId: UUID) -> TerminalNotificationWorkspaceSnapshot {
+        var hasRead = false
+        var visibleSurfaceIds = Set<UUID>()
+        let focusedReadIndicatorSurfaceId = focusedReadIndicatorByTabId[tabId]
+
+        for notification in notifications where notification.tabId == tabId {
+            if notification.isRead {
+                hasRead = true
+            } else if let surfaceId = notification.surfaceId {
+                visibleSurfaceIds.insert(surfaceId)
+            }
+        }
+
+        if let surfaceId = focusedReadIndicatorSurfaceId {
+            visibleSurfaceIds.insert(surfaceId)
+        }
+
+        return TerminalNotificationWorkspaceSnapshot(
+            tabId: tabId,
+            unreadCount: unreadCount(forTabId: tabId),
+            hasRead: hasRead,
+            visibleSurfaceIds: visibleSurfaceIds,
+            latestNotification: latestNotification(forTabId: tabId),
+            focusedReadIndicatorSurfaceId: focusedReadIndicatorSurfaceId
+        )
+    }
+
+    func presentationPublisher(forTabId tabId: UUID) -> AnyPublisher<WorkspaceNotificationPresentation, Never> {
+        workspaceSnapshotPublisher(forTabId: tabId)
+    }
+
+    func workspaceSnapshotPublisher(forTabId tabId: UUID) -> AnyPublisher<TerminalNotificationWorkspaceSnapshot, Never> {
+        Publishers.CombineLatest($notifications, $focusedReadIndicatorByTabId)
+            .map { [weak self] _, _ in
+                self?.workspaceSnapshot(forTabId: tabId) ?? .empty
+            }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
     }
 
     func addNotification(

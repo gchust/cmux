@@ -1827,11 +1827,11 @@ struct ContentView: View {
     @ObservedObject var updateViewModel: UpdateViewModel
     let windowId: UUID
     @EnvironmentObject var tabManager: TabManager
-    @EnvironmentObject var notificationStore: TerminalNotificationStore
     @EnvironmentObject var sidebarState: SidebarState
     @EnvironmentObject var sidebarSelectionState: SidebarSelectionState
     @EnvironmentObject var cmuxConfigStore: CmuxConfigStore
     @EnvironmentObject var fileExplorerState: FileExplorerState
+    private let notificationStore = TerminalNotificationStore.shared
     @State private var sidebarWidth: CGFloat = 200
     @State private var hoveredResizerHandles: Set<SidebarResizerHandle> = []
     @State private var isResizerDragging = false
@@ -1844,6 +1844,7 @@ struct ContentView: View {
     @State private var observedWindow: NSWindow?
     @StateObject private var fullscreenControlsViewModel = TitlebarControlsViewModel()
     @StateObject private var fileExplorerStore = FileExplorerStore()
+    @StateObject private var notificationPresentationStoreCache = WorkspaceNotificationPresentationStoreCache()
     @State private var fileExplorerWidth: CGFloat = 220
     @State private var fileExplorerDragStartWidth: CGFloat?
     @State private var previousSelectedWorkspaceId: UUID?
@@ -1852,6 +1853,7 @@ struct ContentView: View {
     @State private var workspaceHandoffFallbackTask: Task<Void, Never>?
     @State private var didApplyUITestSidebarSelection = false
     @State private var titlebarThemeGeneration: UInt64 = 0
+    @State private var selectedWorkspaceNotificationSnapshot = TerminalNotificationWorkspaceSnapshot.empty
     @State private var sidebarDraggedTabId: UUID?
     @State private var titlebarTextUpdateCoalescer = NotificationBurstCoalescer(delay: 1.0 / 30.0)
     @State private var sidebarResizerCursorReleaseWorkItem: DispatchWorkItem?
@@ -2102,6 +2104,7 @@ struct ContentView: View {
             liveSnapshot: workspace.bonsplitController.layoutSnapshot()
         )
         let contentView = window.contentView
+        let visibleNotificationSurfaceIds = selectedWorkspaceNotificationSnapshot.visibleSurfaceIds
 
         let unreadRects: [CGRect]
         if let layoutSnapshot, let contentView {
@@ -2114,10 +2117,7 @@ struct ContentView: View {
                 }
 
                 let shouldShowUnread = Workspace.shouldShowUnreadIndicator(
-                    hasUnreadNotification: notificationStore.hasVisibleNotificationIndicator(
-                        forTabId: workspace.id,
-                        surfaceId: panelId
-                    ),
+                    hasUnreadNotification: visibleNotificationSurfaceIds.contains(panelId),
                     isManuallyUnread: workspace.manualUnreadPanelIds.contains(panelId)
                 )
                 guard shouldShowUnread else { return nil }
@@ -2135,7 +2135,7 @@ struct ContentView: View {
         } else {
             unreadRects = WorkspaceContentView.tmuxWorkspacePaneWindowUnreadRects(
                 workspace: workspace,
-                notificationStore: notificationStore,
+                visibleNotificationSurfaceIds: visibleNotificationSurfaceIds,
                 layoutSnapshot: layoutSnapshot
             )
         }
@@ -2668,6 +2668,7 @@ struct ContentView: View {
         VerticalTabsSidebar(
             updateViewModel: updateViewModel,
             fileExplorerState: fileExplorerState,
+            notificationPresentationStoreCache: notificationPresentationStoreCache,
             onSendFeedback: presentFeedbackComposer,
             selection: $sidebarSelectionState.selection,
             selectedTabIds: $selectedTabIds,
@@ -2964,6 +2965,14 @@ struct ContentView: View {
         )
     }
 
+    private func refreshSelectedWorkspaceNotificationSnapshot() {
+        guard let selectedTabId = tabManager.selectedTabId else {
+            selectedWorkspaceNotificationSnapshot = .empty
+            return
+        }
+        selectedWorkspaceNotificationSnapshot = notificationStore.workspaceSnapshot(forTabId: selectedTabId)
+    }
+
     private func syncFileExplorerDirectory() {
         guard let selectedId = tabManager.selectedTabId,
               let tab = tabManager.tabs.first(where: { $0.id == selectedId }) else {
@@ -3100,6 +3109,7 @@ struct ContentView: View {
 
         view = AnyView(view.onAppear {
             tabManager.applyWindowBackgroundForSelectedTab()
+            refreshSelectedWorkspaceNotificationSnapshot()
             reconcileMountedWorkspaceIds()
             previousSelectedWorkspaceId = tabManager.selectedTabId
             installSidebarResizerPointerMonitorIfNeeded()
@@ -3187,6 +3197,21 @@ struct ContentView: View {
                 lastSidebarSelectionIndex = tabManager.tabs.firstIndex { $0.id == newValue }
             }
             updateTitlebarText()
+        })
+
+        view = AnyView(view.onReceive(
+            tabManager.$selectedTabId
+                .map { [notificationStore] tabId -> AnyPublisher<TerminalNotificationWorkspaceSnapshot, Never> in
+                    guard let tabId else {
+                        return Just(.empty).eraseToAnyPublisher()
+                    }
+                    return notificationStore.workspaceSnapshotPublisher(forTabId: tabId)
+                }
+                .switchToLatest()
+                .receive(on: RunLoop.main)
+        ) { snapshot in
+            guard selectedWorkspaceNotificationSnapshot != snapshot else { return }
+            selectedWorkspaceNotificationSnapshot = snapshot
         })
 
         view = AnyView(view.onChange(of: selectedTabIds) { _ in
@@ -10089,9 +10114,9 @@ private struct SidebarTabItemPresentationSnapshot: Equatable {
 struct VerticalTabsSidebar: View {
     @ObservedObject var updateViewModel: UpdateViewModel
     @ObservedObject var fileExplorerState: FileExplorerState
+    let notificationPresentationStoreCache: WorkspaceNotificationPresentationStoreCache
     let onSendFeedback: () -> Void
     @EnvironmentObject var tabManager: TabManager
-    @EnvironmentObject var notificationStore: TerminalNotificationStore
     @Binding var selection: SidebarSelection
     @Binding var selectedTabIds: Set<UUID>
     @Binding var lastSidebarSelectionIndex: Int?
@@ -10102,7 +10127,6 @@ struct VerticalTabsSidebar: View {
     @ObservedObject private var keyboardShortcutSettingsObserver = KeyboardShortcutSettingsObserver.shared
     @State private var draggedTabId: UUID?
     @State private var dropIndicator: SidebarDropIndicator?
-    @State private var frozenTabItemPresentation: SidebarTabItemPresentationSnapshot?
     @State private var terminalScrollBarVisibilityGeneration: UInt64 = 0
     @AppStorage(WorkspacePresentationModeSettings.modeKey)
     private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
@@ -10114,10 +10138,6 @@ struct VerticalTabsSidebar: View {
 
     private var isMinimalMode: Bool {
         WorkspacePresentationModeSettings.mode(for: workspacePresentationMode) == .minimal
-    }
-
-    private var showsSidebarNotificationMessage: Bool {
-        tabItemSettingsStore.snapshot.showsNotificationMessage
     }
 
     private var workspaceNumberShortcut: StoredShortcut {
@@ -10177,29 +10197,11 @@ struct VerticalTabsSidebar: View {
                                     contextMenuWorkspaceIds.allSatisfy { workspaceId in
                                         workspaceTerminalScrollBarHiddenById[workspaceId] == true
                                     }
-                                let liveUnreadCount = notificationStore.unreadCount(forTabId: tab.id)
-                                let liveLatestNotificationText: String? = {
-                                    guard showsSidebarNotificationMessage,
-                                          let notification = notificationStore.latestNotification(forTabId: tab.id) else {
-                                        return nil
-                                    }
-                                    let text = notification.body.isEmpty ? notification.title : notification.body
-                                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    return trimmed.isEmpty ? nil : trimmed
-                                }()
-                                let liveShowsModifierShortcutHints = modifierKeyMonitor.isModifierPressed
-                                let livePresentation = SidebarTabItemPresentationSnapshot(
-                                    tabId: tab.id,
-                                    unreadCount: liveUnreadCount,
-                                    latestNotificationText: liveLatestNotificationText,
-                                    showsModifierShortcutHints: liveShowsModifierShortcutHints
-                                )
-                                let frozenPresentation = frozenTabItemPresentation?.tabId == tab.id
-                                    ? frozenTabItemPresentation
-                                    : nil
+                                let notificationPresentationStore = notificationPresentationStoreCache.store(for: tab.id)
                                 TabItemView(
                                     tabManager: tabManager,
-                                    notificationStore: notificationStore,
+                                    notificationStore: TerminalNotificationStore.shared,
+                                    notificationPresentationStore: notificationPresentationStore,
                                     tab: tab,
                                     index: index,
                                     isActive: tabManager.selectedTabId == tab.id,
@@ -10210,13 +10212,11 @@ struct VerticalTabsSidebar: View {
                                     workspaceShortcutModifierSymbol: workspaceNumberShortcut.numberedDigitHintPrefix,
                                     canCloseWorkspace: canCloseWorkspace,
                                     accessibilityWorkspaceCount: workspaceCount,
-                                    unreadCount: frozenPresentation?.unreadCount ?? liveUnreadCount,
-                                    latestNotificationText: frozenPresentation?.latestNotificationText ?? liveLatestNotificationText,
                                     rowSpacing: tabRowSpacing,
                                     setSelectionToTabs: { selection = .tabs },
                                     selectedTabIds: $selectedTabIds,
                                     lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
-                                    showsModifierShortcutHints: frozenPresentation?.showsModifierShortcutHints ?? liveShowsModifierShortcutHints,
+                                    showsModifierShortcutHints: modifierKeyMonitor.isModifierPressed,
                                     dragAutoScrollController: dragAutoScrollController,
                                     draggedTabId: $draggedTabId,
                                     dropIndicator: $dropIndicator,
@@ -10225,9 +10225,7 @@ struct VerticalTabsSidebar: View {
                                     allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
                                     allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
                                     allContextMenuWorkspacesHideTerminalScrollBar: allContextMenuWorkspacesHideTerminalScrollBar,
-                                    settings: tabItemSettings,
-                                    livePresentation: livePresentation,
-                                    frozenPresentation: $frozenTabItemPresentation
+                                    settings: tabItemSettings
                                 )
                                 .equatable()
                             }
@@ -10267,7 +10265,7 @@ struct VerticalTabsSidebar: View {
                 }
                 .overlay(alignment: .topLeading) {
                     if isMinimalMode {
-                        HiddenTitlebarSidebarControlsView(notificationStore: notificationStore)
+                        HiddenTitlebarSidebarControlsView(notificationStore: TerminalNotificationStore.shared)
                             .padding(.leading, hiddenTitlebarControlsLeadingInset)
                             .padding(.top, 2)
                     }
@@ -10291,6 +10289,7 @@ struct VerticalTabsSidebar: View {
             .frame(width: 0, height: 0)
         )
         .onAppear {
+            notificationPresentationStoreCache.removeStaleStores(keepingTabIds: Set(tabManager.tabs.map(\.id)))
             modifierKeyMonitor.start()
             draggedTabId = nil
             dropIndicator = nil
@@ -10329,9 +10328,7 @@ struct VerticalTabsSidebar: View {
             dropIndicator = nil
         }
         .onChange(of: tabs.map(\.id)) { tabIds in
-            guard let frozenTabItemPresentation,
-                  !tabIds.contains(frozenTabItemPresentation.tabId) else { return }
-            self.frozenTabItemPresentation = nil
+            notificationPresentationStoreCache.removeStaleStores(keepingTabIds: Set(tabIds))
         }
         .onReceive(NotificationCenter.default.publisher(for: SidebarDragLifecycleNotification.requestClear)) { notification in
             guard draggedTabId != nil else { return }
@@ -12629,8 +12626,6 @@ private struct TabItemView: View, Equatable {
         lhs.workspaceShortcutModifierSymbol == rhs.workspaceShortcutModifierSymbol &&
         lhs.canCloseWorkspace == rhs.canCloseWorkspace &&
         lhs.accessibilityWorkspaceCount == rhs.accessibilityWorkspaceCount &&
-        lhs.unreadCount == rhs.unreadCount &&
-        lhs.latestNotificationText == rhs.latestNotificationText &&
         lhs.rowSpacing == rhs.rowSpacing &&
         lhs.showsModifierShortcutHints == rhs.showsModifierShortcutHints &&
         lhs.contextMenuWorkspaceIds == rhs.contextMenuWorkspaceIds &&
@@ -12646,6 +12641,7 @@ private struct TabItemView: View, Equatable {
     // action handlers use the plain references without triggering re-evaluation.
     let tabManager: TabManager
     let notificationStore: TerminalNotificationStore
+    @ObservedObject var notificationPresentationStore: WorkspaceNotificationPresentationStore
     @Environment(\.colorScheme) private var colorScheme
     let tab: Tab
     let index: Int
@@ -12654,8 +12650,6 @@ private struct TabItemView: View, Equatable {
     let workspaceShortcutModifierSymbol: String
     let canCloseWorkspace: Bool
     let accessibilityWorkspaceCount: Int
-    let unreadCount: Int
-    let latestNotificationText: String?
     let rowSpacing: CGFloat
     let setSelectionToTabs: () -> Void
     @Binding var selectedTabIds: Set<UUID>
@@ -12670,12 +12664,11 @@ private struct TabItemView: View, Equatable {
     let allRemoteContextMenuTargetsDisconnected: Bool
     let allContextMenuWorkspacesHideTerminalScrollBar: Bool
     let settings: SidebarTabItemSettingsSnapshot
-    let livePresentation: SidebarTabItemPresentationSnapshot
-    @Binding var frozenPresentation: SidebarTabItemPresentationSnapshot?
     @State private var workspaceObservationGeneration: UInt64 = 0
     @StateObject private var contextMenuState = SidebarTabItemContextMenuState()
     @State private var isHovering = false
     @State private var rowHeight: CGFloat = 1
+    @State private var frozenPresentation: SidebarTabItemPresentationSnapshot?
 
     var isMultiSelected: Bool {
         selectedTabIds.contains(tab.id)
@@ -12737,6 +12730,37 @@ private struct TabItemView: View, Equatable {
         .semibold
     }
 
+    private var liveLatestNotificationText: String? {
+        guard settings.showsNotificationMessage,
+              let notification = notificationPresentationStore.presentation.latestNotification else {
+            return nil
+        }
+        let text = notification.body.isEmpty ? notification.title : notification.body
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var livePresentation: SidebarTabItemPresentationSnapshot {
+        SidebarTabItemPresentationSnapshot(
+            tabId: tab.id,
+            unreadCount: notificationPresentationStore.presentation.unreadCount,
+            latestNotificationText: liveLatestNotificationText,
+            showsModifierShortcutHints: showsModifierShortcutHints
+        )
+    }
+
+    private var effectiveUnreadCount: Int {
+        frozenPresentation?.unreadCount ?? notificationPresentationStore.presentation.unreadCount
+    }
+
+    private var effectiveLatestNotificationText: String? {
+        frozenPresentation?.latestNotificationText ?? liveLatestNotificationText
+    }
+
+    private var effectiveShowsModifierShortcutHints: Bool {
+        frozenPresentation?.showsModifierShortcutHints ?? showsModifierShortcutHints
+    }
+
     private var showsLeadingRail: Bool {
         explicitRailColor != nil
     }
@@ -12796,7 +12820,7 @@ private struct TabItemView: View, Equatable {
     }
 
     private var showCloseButton: Bool {
-        isHovering && canCloseWorkspace && !(showsModifierShortcutHints || alwaysShowShortcutHints)
+        isHovering && canCloseWorkspace && !(effectiveShowsModifierShortcutHints || alwaysShowShortcutHints)
     }
 
     private var workspaceShortcutLabel: String? {
@@ -12805,7 +12829,7 @@ private struct TabItemView: View, Equatable {
     }
 
     private var showsWorkspaceShortcutHint: Bool {
-        (showsModifierShortcutHints || alwaysShowShortcutHints) && workspaceShortcutLabel != nil
+        (effectiveShowsModifierShortcutHints || alwaysShowShortcutHints) && workspaceShortcutLabel != nil
     }
 
     private var trailingAccessoryWidth: CGFloat {
@@ -12882,7 +12906,7 @@ private struct TabItemView: View, Equatable {
                         .lineLimit(1)
                 }
             }
-            .padding(.top, latestNotificationText == nil ? 1 : 2)
+            .padding(.top, effectiveLatestNotificationText == nil ? 1 : 2)
             .safeHelp(remoteStateHelpText)
         }
     }
@@ -12910,7 +12934,7 @@ private struct TabItemView: View, Equatable {
         let accessibilityHintText = String(localized: "sidebar.workspace.accessibilityHint", defaultValue: "Activate to focus this workspace. Drag to reorder, or use Move Up and Move Down actions.")
         let moveUpActionText = String(localized: "sidebar.workspace.moveUpAction", defaultValue: "Move Up")
         let moveDownActionText = String(localized: "sidebar.workspace.moveDownAction", defaultValue: "Move Down")
-        let latestNotificationSubtitle = latestNotificationText
+        let latestNotificationSubtitle = effectiveLatestNotificationText
         let effectiveSubtitle = latestNotificationSubtitle
         let detailVisibility = visibleAuxiliaryDetails
         let orderedPanelIds: [UUID]? = (detailVisibility.showsBranchDirectory || detailVisibility.showsPullRequests)
@@ -12953,11 +12977,11 @@ private struct TabItemView: View, Equatable {
 
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                if unreadCount > 0 {
+                if effectiveUnreadCount > 0 {
                     ZStack {
                         Circle()
                             .fill(activeUnreadBadgeFillColor)
-                        Text("\(unreadCount)")
+                        Text("\(effectiveUnreadCount)")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundColor(.white)
                     }
@@ -13006,7 +13030,7 @@ private struct TabItemView: View, Equatable {
                             .transition(.opacity)
                     }
                 }
-                .animation(.easeOut(duration: 0.12), value: showsModifierShortcutHints || alwaysShowShortcutHints)
+                .animation(.easeOut(duration: 0.12), value: effectiveShowsModifierShortcutHints || alwaysShowShortcutHints)
                 .frame(width: trailingAccessoryWidth, height: 16, alignment: .trailing)
             }
 
@@ -13901,8 +13925,8 @@ private struct TabItemView: View, Equatable {
         syncSelectionAfterMutation()
     }
 
-    // latestNotificationText is now passed as a parameter from the parent view
-    // to avoid subscribing to notificationStore changes in every TabItemView.
+    // Notification presentation is observed per workspace row so unrelated
+    // workspace notifications do not invalidate sibling sidebar rows.
 
     private func branchDirectoryRow(
         gitSummary: String?,
