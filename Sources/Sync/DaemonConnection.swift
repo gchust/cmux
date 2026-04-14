@@ -763,6 +763,7 @@ final class DaemonConnection: @unchecked Sendable {
             // emits this when recompute produces a new effective size.
             guard let sid = obj["session_id"] as? String else { return }
             if let (cols, rows) = DaemonConnection.effectiveSizeFields(obj) {
+                NSLog("📱 DaemonConnection.push session.size_changed session=%@ cols=%d rows=%d", String(sid.prefix(12)), cols, rows)
                 handleEffectiveSize(sessionID: sid, cols: cols, rows: rows)
             }
         case "workspace.changed":

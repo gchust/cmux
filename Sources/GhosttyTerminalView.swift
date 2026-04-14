@@ -4557,6 +4557,9 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
         guard effectiveGridPin?.cols != next?.cols || effectiveGridPin?.rows != next?.rows else { return }
         effectiveGridPin = next
+        #if DEBUG
+        dlog("effectiveGrid.apply surface=\(id.uuidString.prefix(8)) cols=\(cols) rows=\(rows)")
+        #endif
         reapplyEffectiveGridPinIfNeeded()
     }
 
