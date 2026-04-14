@@ -568,7 +568,10 @@ final class FileExplorerStore: ObservableObject {
         if provider is LocalFileExplorerProvider, !rootPath.isEmpty {
             if directoryWatcher == nil {
                 directoryWatcher = FileExplorerDirectoryWatcher { [weak self] in
-                    self?.reload()
+                    // Prefer a non-destructive refresh so the outline view keeps
+                    // its scroll position and expansion state when files change
+                    // on disk (e.g. editor saves, bulk renames).
+                    self?.refreshFromDisk()
                     self?.refreshGitStatus()
                 }
             }
@@ -604,6 +607,80 @@ final class FileExplorerStore: ObservableObject {
             await self.loadChildren(for: nil, at: path)
         }
         loadTasks[rootPath] = task
+    }
+
+    /// Non-destructive refresh triggered by the filesystem watcher. Preserves
+    /// existing node identities so the outline view keeps its scroll position
+    /// and expansion state across edits (e.g. editor saves, bulk git operations).
+    func refreshFromDisk() {
+        guard !rootPath.isEmpty, provider != nil else { return }
+        // If we're still loading the initial root, fall back to the canonical path.
+        if isRootLoading || rootNodes.isEmpty {
+            reload()
+            return
+        }
+        let path = rootPath
+        Task { [weak self] in
+            guard let self else { return }
+            await self.mergeChildren(parent: nil, at: path)
+        }
+    }
+
+    @MainActor
+    private func mergeChildren(parent: FileExplorerNode?, at path: String) async {
+        guard let provider else { return }
+        let entries: [FileExplorerEntry]
+        do {
+            entries = try await provider.listDirectory(path: path, showHidden: showHiddenFiles)
+        } catch {
+            return
+        }
+
+        let sorted = entries.sorted { a, b in
+            if a.isDirectory != b.isDirectory { return a.isDirectory }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+
+        let existing: [FileExplorerNode] = parent?.children ?? rootNodes
+        let existingByPath: [String: FileExplorerNode] = Dictionary(
+            existing.map { ($0.path, $0) },
+            uniquingKeysWith: { lhs, _ in lhs }
+        )
+
+        var merged: [FileExplorerNode] = []
+        merged.reserveCapacity(sorted.count)
+        for entry in sorted {
+            if let reused = existingByPath[entry.path], reused.isDirectory == entry.isDirectory {
+                merged.append(reused)
+            } else {
+                let node = FileExplorerNode(name: entry.name, path: entry.path, isDirectory: entry.isDirectory)
+                nodesByPath[entry.path] = node
+                merged.append(node)
+            }
+        }
+
+        // Drop orphaned nodes from nodesByPath.
+        let newPaths = Set(merged.map(\.path))
+        for old in existing where !newPaths.contains(old.path) {
+            nodesByPath.removeValue(forKey: old.path)
+        }
+
+        let oldOrder = existing.map(\.path)
+        let newOrder = merged.map(\.path)
+        if oldOrder != newOrder {
+            if let parent {
+                parent.children = merged
+            } else {
+                rootNodes = merged
+            }
+            objectWillChange.send()
+        }
+
+        // Recurse into directories that are already expanded AND have children
+        // loaded, so nested edits also get merged without collapsing anything.
+        for child in merged where child.isDirectory && expandedPaths.contains(child.path) && child.children != nil {
+            await mergeChildren(parent: child, at: child.path)
+        }
     }
 
     func expand(node: FileExplorerNode) {
