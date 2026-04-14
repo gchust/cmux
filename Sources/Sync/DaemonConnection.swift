@@ -126,11 +126,25 @@ final class DaemonConnection: @unchecked Sendable {
     private struct TerminalSubscription {
         let onOutput: (Data) -> Void
         let onDisconnect: (String?) -> Void
+        /// Invoked on the daemon reader thread whenever the daemon's
+        /// `effective_cols/effective_rows` for this session changes (either
+        /// from an in-band RPC response or the `session.size_changed` push
+        /// event). Callers snap the Ghostty surface to this grid so every
+        /// attached device renders at the same size regardless of container
+        /// geometry.
+        let onEffectiveSize: (_ cols: Int, _ rows: Int) -> Void
         var attachmentID: String
         var cols: Int
         var rows: Int
         var shellCommand: String
         var lastOffset: UInt64
+        /// Last (cols, rows) we've reported via `onEffectiveSize`. Used to
+        /// suppress no-op re-dispatch when the same size echoes back on
+        /// multiple RPC responses (attach → resize → subscribe all carry
+        /// the field) or when a push racing with a response repeats a
+        /// value the client already applied.
+        var lastEffectiveCols: Int = 0
+        var lastEffectiveRows: Int = 0
     }
 
     static var defaultSocketPath: String {
@@ -280,12 +294,14 @@ final class DaemonConnection: @unchecked Sendable {
         cols: Int,
         rows: Int,
         onOutput: @escaping (Data) -> Void,
-        onDisconnect: @escaping (String?) -> Void
+        onDisconnect: @escaping (String?) -> Void,
+        onEffectiveSize: @escaping (_ cols: Int, _ rows: Int) -> Void = { _, _ in }
     ) {
         let attachmentID = "bridge-\(UUID().uuidString.prefix(8).lowercased())"
         let sub = TerminalSubscription(
             onOutput: onOutput,
             onDisconnect: onDisconnect,
+            onEffectiveSize: onEffectiveSize,
             attachmentID: attachmentID,
             cols: max(1, cols),
             rows: max(1, rows),
@@ -336,7 +352,14 @@ final class DaemonConnection: @unchecked Sendable {
                 "attachment_id": attachmentID,
                 "cols": max(1, cols),
                 "rows": max(1, rows),
-            ], completion: nil)
+            ]) { [weak self] result in
+                if case .success(let resp) = result,
+                   let ok = resp["ok"] as? Bool, ok,
+                   let r = resp["result"] as? [String: Any],
+                   let (ec, er) = DaemonConnection.effectiveSizeFields(r) {
+                    self?.handleEffectiveSize(sessionID: sessionID, cols: ec, rows: er)
+                }
+            }
         }
     }
 
@@ -360,19 +383,30 @@ final class DaemonConnection: @unchecked Sendable {
             guard let self else { return }
             if case .success(let resp) = result,
                let ok = resp["ok"] as? Bool, ok,
-               let r = resp["result"] as? [String: Any],
-               let bootstrap = r["attachment_id"] as? String {
-                self.sendRPCAsync(method: "session.detach", params: [
-                    "session_id": sessionID,
-                    "attachment_id": bootstrap,
-                ], completion: nil)
+               let r = resp["result"] as? [String: Any] {
+                if let (ec, er) = DaemonConnection.effectiveSizeFields(r) {
+                    self.handleEffectiveSize(sessionID: sessionID, cols: ec, rows: er)
+                }
+                if let bootstrap = r["attachment_id"] as? String {
+                    self.sendRPCAsync(method: "session.detach", params: [
+                        "session_id": sessionID,
+                        "attachment_id": bootstrap,
+                    ], completion: nil)
+                }
             }
             self.sendRPCAsync(method: "session.attach", params: [
                 "session_id": sessionID,
                 "attachment_id": attachmentID,
                 "cols": cols,
                 "rows": rows,
-            ], completion: nil)
+            ]) { [weak self] attachResult in
+                if case .success(let r) = attachResult,
+                   let ok = r["ok"] as? Bool, ok,
+                   let result = r["result"] as? [String: Any],
+                   let (ec, er) = DaemonConnection.effectiveSizeFields(result) {
+                    self?.handleEffectiveSize(sessionID: sessionID, cols: ec, rows: er)
+                }
+            }
             self.sendRPCAsync(method: "terminal.subscribe", params: [
                 "session_id": sessionID,
                 "offset": lastOffset,
@@ -401,6 +435,52 @@ final class DaemonConnection: @unchecked Sendable {
             terminalHandlers[sessionID] = sub
         }
         stateLock.unlock()
+    }
+
+    /// Central dispatch for "daemon reports this session's effective grid
+    /// is now C×R". Callable from the reader thread via session.size_changed
+    /// and from any RPC response that carries effective_cols/effective_rows
+    /// (terminal.open, session.attach, session.resize). Deduplicates repeated
+    /// identical values and no-ops when the session isn't subscribed so a
+    /// stale push that races past unsubscribe is harmless.
+    private func handleEffectiveSize(sessionID: String, cols: Int, rows: Int) {
+        guard cols > 0, rows > 0 else { return }
+        stateLock.lock()
+        guard var sub = terminalHandlers[sessionID] else {
+            stateLock.unlock()
+            return
+        }
+        if sub.lastEffectiveCols == cols && sub.lastEffectiveRows == rows {
+            stateLock.unlock()
+            return
+        }
+        sub.lastEffectiveCols = cols
+        sub.lastEffectiveRows = rows
+        terminalHandlers[sessionID] = sub
+        let callback = sub.onEffectiveSize
+        stateLock.unlock()
+        callback(cols, rows)
+    }
+
+    /// Read `effective_cols` / `effective_rows` out of a dictionary,
+    /// tolerating both `Int` and `UInt64` decode shapes. Works on either
+    /// an RPC response's `result` dict (terminal.open / session.attach /
+    /// session.resize) or directly on a `session.size_changed` event
+    /// frame where the fields live at the top level. Returns nil when
+    /// either field is missing or zero — a zero means the daemon hasn't
+    /// settled on a real size yet, don't apply it.
+    private static func effectiveSizeFields(_ dict: [String: Any]) -> (cols: Int, rows: Int)? {
+        func readInt(_ value: Any?) -> Int? {
+            if let i = value as? Int { return i }
+            if let u = value as? UInt64 { return Int(u) }
+            if let n = value as? NSNumber { return n.intValue }
+            return nil
+        }
+        guard let cols = readInt(dict["effective_cols"]), cols > 0,
+              let rows = readInt(dict["effective_rows"]), rows > 0 else {
+            return nil
+        }
+        return (cols, rows)
     }
 
     private func deliverTerminalOutput(sessionID: String, data: Data) {
@@ -676,6 +756,14 @@ final class DaemonConnection: @unchecked Sendable {
                 terminalHandlers.removeValue(forKey: sid)
                 stateLock.unlock()
                 cb?(nil)
+            }
+        case "session.size_changed":
+            // Top-level fields, matching the daemon's wire format (no
+            // params wrapper). session_service.broadcastSessionSizeChanged
+            // emits this when recompute produces a new effective size.
+            guard let sid = obj["session_id"] as? String else { return }
+            if let (cols, rows) = DaemonConnection.effectiveSizeFields(obj) {
+                handleEffectiveSize(sessionID: sid, cols: cols, rows: rows)
             }
         case "workspace.changed":
             guard let result = obj["result"] as? [String: Any] else { return }

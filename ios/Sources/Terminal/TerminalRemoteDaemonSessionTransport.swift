@@ -111,12 +111,15 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
 
     func resize(_ size: TerminalGridSize) async {
         guard let state = lockedSessionState() else { return }
-        _ = try? await client.sessionResize(
+        let result = try? await client.sessionResize(
             sessionID: state.sessionID,
             attachmentID: state.attachmentID,
             cols: max(1, size.columns),
             rows: max(1, size.rows)
         )
+        if let result {
+            eventHandler?(.effectiveSize(cols: result.effectiveCols, rows: result.effectiveRows))
+        }
     }
 
     func disconnect() async {
@@ -166,7 +169,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
         // attachment ID so we don't leak attachments on reconnection.
         if let sharedSessionID {
             do {
-                _ = try await client.sessionAttach(
+                let status = try await client.sessionAttach(
                     sessionID: sharedSessionID,
                     attachmentID: stableAttachmentID,
                     cols: cols,
@@ -179,6 +182,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
                     nextOffset = 0
                     closed = false
                 }
+                emitEffectiveSize(cols: status.effectiveCols, rows: status.effectiveRows)
                 return
             } catch let error as TerminalRemoteDaemonClientError {
                 if case .rpc(let code, _) = error, code == "not_found" {
@@ -192,7 +196,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
         // Try resuming a previously saved session (non-shared only)
         if let resumeState, sharedSessionID == nil {
             do {
-                _ = try await client.sessionAttach(
+                let status = try await client.sessionAttach(
                     sessionID: resumeState.sessionID,
                     attachmentID: resumeState.attachmentID,
                     cols: cols,
@@ -204,6 +208,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
                     nextOffset = resumeState.readOffset
                     closed = false
                 }
+                emitEffectiveSize(cols: status.effectiveCols, rows: status.effectiveRows)
                 return
             } catch let error as TerminalRemoteDaemonClientError {
                 if case .rpc(let code, _) = error, code == "not_found" {
@@ -227,6 +232,17 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
             nextOffset = openResult.offset
             closed = false
         }
+        emitEffectiveSize(cols: openResult.effectiveCols, rows: openResult.effectiveRows)
+    }
+
+    /// Forward the daemon's authoritative `(effective_cols, effective_rows)`
+    /// to the event handler whenever the backend reports a real size
+    /// (nonzero on both axes). Zero on either axis means the daemon hasn't
+    /// settled yet, likely because no attachment has reported geometry —
+    /// skip so we don't collapse the local Ghostty surface to 0 cols.
+    private func emitEffectiveSize(cols: Int, rows: Int) {
+        guard cols > 0, rows > 0 else { return }
+        eventHandler?(.effectiveSize(cols: cols, rows: rows))
     }
 
     private func startReadLoop() {
@@ -283,6 +299,8 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
         case .eof:
             clearSessionState()
             finishDisconnect(error: nil)
+        case .sizeChanged(let cols, let rows):
+            eventHandler?(.effectiveSize(cols: cols, rows: rows))
         }
     }
 

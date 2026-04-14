@@ -17,6 +17,13 @@ enum TerminalTransportEvent: Sendable {
     case notice(String)
     case trustedHostKey(String)
     case remotePlatform(RemotePlatform)
+    /// Daemon-authoritative effective grid for the session. Emitted when
+    /// the min-across-attachments changes. Clients snap the local Ghostty
+    /// surface to this size so every attached device renders at the same
+    /// grid, with larger devices letterboxing the rest inside a bordered
+    /// frame. Only the remote-daemon transport produces this today; SSH
+    /// transports ignore the field by virtue of never emitting it.
+    case effectiveSize(cols: Int, rows: Int)
 }
 
 protocol TerminalTransport: AnyObject {

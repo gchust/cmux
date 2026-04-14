@@ -12,11 +12,22 @@ protocol TerminalSurfaceHosting: AnyObject {
     func processOutput(_ data: Data)
     func focusInput()
     func updateRemotePlatform(_ platform: RemotePlatform)
+    /// Pin the Ghostty surface to this (cols, rows) grid regardless of the
+    /// container's natural capacity. Emitted by the daemon whenever the
+    /// min-across-attachments changes (either another device joined at a
+    /// smaller grid or the smallest device detached). Containers larger
+    /// than the effective grid letterbox the surface and draw a subtle
+    /// border around the active region; containers matching the effective
+    /// grid (the smallest device) fill the full area with no border.
+    /// Pass `cols = 0` or `rows = 0` to clear the pin and revert to the
+    /// container-driven sizing.
+    func applyEffectiveGrid(cols: Int, rows: Int)
 }
 
 extension TerminalSurfaceHosting {
     func focusInput() {}
     func updateRemotePlatform(_ platform: RemotePlatform) {}
+    func applyEffectiveGrid(cols _: Int, rows _: Int) {}
 }
 
 final class GhosttySurfaceBridge {
@@ -398,6 +409,24 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
     private(set) var surface: ghostty_surface_t?
     private var lastReportedSize: TerminalGridSize?
     private var lastSnapshotFallbackHTML: String?
+    /// Daemon-authoritative effective grid (min across attached devices). When
+    /// set, the Ghostty surface is pinned to this cols×rows inside the
+    /// container so every attached device renders at the same grid. When
+    /// nil, the surface fills the container's natural capacity.
+    private var effectiveGrid: (cols: Int, rows: Int)?
+    /// Cached cell metrics derived from the most recent
+    /// `ghostty_surface_size` measurement. Used to translate an effective
+    /// cols×rows pin into a pixel box without re-round-tripping through
+    /// Ghostty. Zero until the first layout has measured.
+    private var cellPixelSize: CGSize = .zero
+    /// 1 px separator stroke drawn around the pinned surface rect when the
+    /// container is larger than the render target (i.e., this device is
+    /// not the smallest). Added lazily on first letterbox.
+    private var letterboxBorderLayer: CAShapeLayer?
+    /// Last render rect used for the Ghostty surface inside the host view's
+    /// coordinate space. Kept so the border layer can match it without a
+    /// second set_size round-trip.
+    private var lastRenderRect: CGRect = .zero
 
     var currentGridSize: TerminalGridSize {
         lastReportedSize ?? TerminalGridSize(columns: 100, rows: 32, pixelWidth: 900, pixelHeight: 650)
@@ -882,59 +911,162 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         ghostty_surface_set_occlusion(surface, visible)
     }
 
+    func applyEffectiveGrid(cols: Int, rows: Int) {
+        let next: (cols: Int, rows: Int)?
+        if cols > 0 && rows > 0 {
+            next = (cols, rows)
+        } else {
+            next = nil
+        }
+        guard effectiveGrid?.cols != next?.cols || effectiveGrid?.rows != next?.rows else { return }
+        effectiveGrid = next
+        setNeedsLayout()
+        if window != nil {
+            syncSurfaceGeometry()
+        }
+    }
+
     private func syncSurfaceGeometry() {
         guard let surface else { return }
 
         let scale = preferredScreenScale
-        syncRendererLayerFrame(scale: scale)
         ghostty_surface_set_content_scale(surface, scale, scale)
 
-        let width = UInt32(max(1, Int((bounds.width * scale).rounded(.down))))
-        // When the keyboard is visible, keyboardHeight already includes the accessory bar.
-        // When hidden, subtract the accessory bar height + safe area bottom inset
-        // (the view extends behind the safe area on notched/Dynamic Island iPhones).
-        let bottomInset: CGFloat
-        if keyboardHeight > 0 {
-            bottomInset = 0
-        } else {
-            let accessory: CGFloat = 44
-            let safeBottom = safeAreaInsets.bottom
-            bottomInset = accessory + safeBottom
-        }
-        let effectiveHeight = max(1, bounds.height - keyboardHeight - bottomInset)
-        let height = UInt32(max(1, Int((effectiveHeight * scale).rounded(.down))))
-        ghostty_surface_set_size(surface, width, height)
+        // The container's natural device-preferred pixel box. Keyboard
+        // visibility is INTENTIONALLY not factored into the reported grid —
+        // the keyboard is a local overlay, not a change in this device's
+        // session capacity. Letting it shrink the reported rows would
+        // propagate through `session.resize` and drag the shared min-
+        // across-attachments effective grid smaller for every attached
+        // device, which caused rendering flicker on iPad whenever anyone
+        // typed on iPhone. See multi-device sharing plan.
+        let accessory: CGFloat = 44
+        let bottomInset = accessory + safeAreaInsets.bottom
+        let containerW = max(1, bounds.width)
+        let containerH = max(1, bounds.height - bottomInset)
+        let containerPxW = UInt32(max(1, Int((containerW * scale).rounded(.down))))
+        let containerPxH = UInt32(max(1, Int((containerH * scale).rounded(.down))))
 
-        let size = ghostty_surface_size(surface)
-        let nextSize = TerminalGridSize(
-            columns: Int(size.columns),
-            rows: Int(size.rows),
-            pixelWidth: Int(size.width_px),
-            pixelHeight: Int(size.height_px)
+        // Measure the container's natural cell capacity by sizing Ghostty
+        // to the full container box and reading back cols/rows. This is
+        // what we report via `session.resize`; the daemon aggregates
+        // min-across-attachments from these reports.
+        ghostty_surface_set_size(surface, containerPxW, containerPxH)
+        let measured = ghostty_surface_size(surface)
+        if measured.columns > 0 && measured.rows > 0 && measured.width_px > 0 && measured.height_px > 0 {
+            cellPixelSize = CGSize(
+                width: CGFloat(measured.width_px) / CGFloat(measured.columns),
+                height: CGFloat(measured.height_px) / CGFloat(measured.rows)
+            )
+        }
+        let naturalSize = TerminalGridSize(
+            columns: Int(measured.columns),
+            rows: Int(measured.rows),
+            pixelWidth: Int(measured.width_px),
+            pixelHeight: Int(measured.height_px)
         )
+
+        // If the daemon pinned us to a smaller effective grid, re-size
+        // Ghostty to that grid in pixels and remember the inner rect so
+        // the renderer layer + border can center around it. If the pin
+        // would exceed the container (stale push mid-resize, or we are
+        // actually the smallest device) fall back to natural fill.
+        let renderRect: CGRect
+        let renderPxW: UInt32
+        let renderPxH: UInt32
+        if let eff = effectiveGrid,
+           eff.cols > 0, eff.rows > 0,
+           cellPixelSize.width > 0, cellPixelSize.height > 0 {
+            let pinnedW = CGFloat(eff.cols) * cellPixelSize.width / scale
+            let pinnedH = CGFloat(eff.rows) * cellPixelSize.height / scale
+            if pinnedW + 0.5 < containerW || pinnedH + 0.5 < containerH {
+                let clampedW = min(pinnedW, containerW)
+                let clampedH = min(pinnedH, containerH)
+                let originX = ((containerW - clampedW) / 2).rounded()
+                // Keep the pinned surface anchored near the top of the
+                // container — preserves the existing convention where the
+                // terminal fills from top and extends down, and keeps the
+                // prompt visible when the keyboard covers the bottom.
+                let originY = ((containerH - clampedH) / 2).rounded()
+                renderRect = CGRect(x: originX, y: originY, width: clampedW, height: clampedH)
+                renderPxW = UInt32(max(1, Int((clampedW * scale).rounded(.down))))
+                renderPxH = UInt32(max(1, Int((clampedH * scale).rounded(.down))))
+                ghostty_surface_set_size(surface, renderPxW, renderPxH)
+            } else {
+                renderRect = CGRect(x: 0, y: 0, width: containerW, height: containerH)
+                renderPxW = containerPxW
+                renderPxH = containerPxH
+            }
+        } else {
+            renderRect = CGRect(x: 0, y: 0, width: containerW, height: containerH)
+            renderPxW = containerPxW
+            renderPxH = containerPxH
+        }
+
+        lastRenderRect = renderRect
+        syncRendererLayerFrame(scale: scale, renderRect: renderRect)
+        updateLetterboxBorder(renderRect: renderRect, isLetterboxed: renderRect.width + 0.5 < containerW || renderRect.height + 0.5 < containerH)
+
         liveAnchormuxLog(
-            "surface.geometry bounds=\(Int(bounds.width))x\(Int(bounds.height)) px=\(nextSize.pixelWidth)x\(nextSize.pixelHeight) cols=\(nextSize.columns) rows=\(nextSize.rows)"
+            "surface.geometry bounds=\(Int(bounds.width))x\(Int(bounds.height)) container=\(Int(containerW))x\(Int(containerH)) render=\(Int(renderRect.width))x\(Int(renderRect.height))@\(Int(renderRect.origin.x)),\(Int(renderRect.origin.y)) natural=\(naturalSize.columns)x\(naturalSize.rows) effective=\(effectiveGrid.map { "\($0.cols)x\($0.rows)" } ?? "none")"
         )
         ghostty_surface_refresh(surface)
         syncSnapshotFallback()
         if window != nil {
             logLayerTree(reason: "geometry")
         }
-        guard nextSize != lastReportedSize else { return }
-        lastReportedSize = nextSize
-        delegate?.ghosttySurfaceView(self, didResize: nextSize)
+        guard naturalSize != lastReportedSize else { return }
+        lastReportedSize = naturalSize
+        delegate?.ghosttySurfaceView(self, didResize: naturalSize)
     }
 
-    private func syncRendererLayerFrame(scale: CGFloat) {
+    private func syncRendererLayerFrame(scale: CGFloat, renderRect: CGRect) {
         layer.contentsScale = scale
         for sublayer in layer.sublayers ?? [] where isGhosttyRendererLayer(sublayer) {
-            if sublayer.frame != layer.bounds {
-                sublayer.frame = layer.bounds
+            if sublayer.frame != renderRect {
+                sublayer.frame = renderRect
             }
-            if sublayer.bounds.size != layer.bounds.size {
-                sublayer.bounds = layer.bounds
+            if sublayer.bounds.size != renderRect.size {
+                sublayer.bounds = CGRect(origin: .zero, size: renderRect.size)
             }
             sublayer.contentsScale = scale
+        }
+    }
+
+    /// Add / update a 1-pixel separator border around the pinned surface
+    /// rect when the container is larger (this device is not the smallest
+    /// attached to the shared PTY). Smallest-device layouts have
+    /// `isLetterboxed == false` and the border layer is hidden. Uses a
+    /// CAShapeLayer so the stroke doesn't intercept touches / key events.
+    private func updateLetterboxBorder(renderRect: CGRect, isLetterboxed: Bool) {
+        guard isLetterboxed else {
+            letterboxBorderLayer?.isHidden = true
+            return
+        }
+        let border: CAShapeLayer = {
+            if let existing = letterboxBorderLayer { return existing }
+            let b = CAShapeLayer()
+            b.fillColor = UIColor.clear.cgColor
+            b.lineWidth = 1.0
+            b.zPosition = 1000 // above the Ghostty renderer layer
+            b.isHidden = false
+            // Decorative only; let pointer / key events pass through.
+            b.isGeometryFlipped = false
+            layer.addSublayer(b)
+            letterboxBorderLayer = b
+            return b
+        }()
+        border.isHidden = false
+        border.strokeColor = UIColor.separator.resolvedColor(with: traitCollection).cgColor
+        border.contentsScale = layer.contentsScale
+        let inset: CGFloat = 1.5 // half-line out so the stroke hugs the edge
+        let outline = renderRect.insetBy(dx: -inset, dy: -inset)
+        let path = UIBezierPath(rect: outline).cgPath
+        if border.path != path {
+            border.path = path
+        }
+        if border.frame != layer.bounds {
+            border.frame = layer.bounds
         }
     }
 
