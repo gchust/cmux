@@ -66,11 +66,12 @@ const editor = monaco.editor.create(container, {
 // --- Outbound events ---------------------------------------------------------
 
 let ignoreNextChange = false;
+let changedDebounceHandle: number | null = null;
 
-editor.onDidChangeModelContent((event) => {
-  if (ignoreNextChange) {
-    ignoreNextChange = false;
-    return;
+function flushChanged(): void {
+  if (changedDebounceHandle !== null) {
+    window.clearTimeout(changedDebounceHandle);
+    changedDebounceHandle = null;
   }
   const model = editor.getModel();
   if (!model) return;
@@ -81,8 +82,26 @@ editor.onDidChangeModelContent((event) => {
     type: "changed",
     value: model.getValue(),
     cursor: { offset, length: Math.max(0, end - offset) },
-    versionId: event.versionId,
+    versionId: model.getVersionId(),
   });
+}
+
+function scheduleChangedFlush(): void {
+  if (changedDebounceHandle !== null) return;
+  // 120ms is tight enough to feel live in the tab title's dirty indicator while
+  // still coalescing bursts of fast typing into one cross-bridge JSON roundtrip.
+  changedDebounceHandle = window.setTimeout(() => {
+    changedDebounceHandle = null;
+    flushChanged();
+  }, 120);
+}
+
+editor.onDidChangeModelContent(() => {
+  if (ignoreNextChange) {
+    ignoreNextChange = false;
+    return;
+  }
+  scheduleChangedFlush();
 });
 
 // Debounced snapshot of cursor + scroll + Monaco view state.
@@ -122,8 +141,9 @@ editor.onDidChangeCursorPosition(scheduleViewStateSnapshot);
 editor.onDidChangeCursorSelection(scheduleViewStateSnapshot);
 editor.onDidScrollChange(scheduleViewStateSnapshot);
 
-// Cmd+S → forward to Swift (host decides whether to actually save).
+// Cmd+S → flush pending edits, then ask Swift to save.
 editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+  flushChanged();
   postToSwift({ type: "saveRequested" });
 });
 
@@ -189,7 +209,7 @@ function apply(cmd: OutboundCommand): void {
       }
       return;
     }
-    case "setTheme":
+    case "setTheme": {
       applyCmuxPalette(monaco, {
         isDark: cmd.isDark,
         backgroundHex: cmd.backgroundHex,
@@ -198,7 +218,20 @@ function apply(cmd: OutboundCommand): void {
         selectionBackgroundHex: cmd.selectionBackgroundHex,
         ansi: cmd.ansi,
       });
+      const updates: monaco.editor.IEditorOptions = {};
+      if (cmd.fontFamily) {
+        // Append ui-monospace as a fallback so Monaco still renders nicely when
+        // Ghostty's configured family is missing locally (remote workspaces).
+        updates.fontFamily = `${quoteFontFamily(cmd.fontFamily)}, ui-monospace, SFMono-Regular, Menlo, monospace`;
+      }
+      if (typeof cmd.fontSize === "number" && cmd.fontSize > 0) {
+        updates.fontSize = cmd.fontSize;
+      }
+      if (Object.keys(updates).length > 0) {
+        editor.updateOptions(updates);
+      }
       return;
+    }
     case "setLanguage": {
       const model = editor.getModel();
       if (model) monaco.editor.setModelLanguage(model, cmd.languageId || "plaintext");
@@ -211,6 +244,11 @@ function apply(cmd: OutboundCommand): void {
 }
 
 window.cmuxMonaco = { apply };
+
+function quoteFontFamily(name: string): string {
+  if (/^[A-Za-z0-9_-]+$/.test(name)) return name;
+  return `"${name.replace(/"/g, '\\"')}"`;
+}
 
 // Signal readiness: Swift will respond with setText / restoreViewState / setTheme.
 const readyMessage: InboundMessage = { type: "ready" };

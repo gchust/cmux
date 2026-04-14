@@ -138,7 +138,10 @@ private struct MonacoWebViewRepresentable: NSViewRepresentable {
         config.userContentController = userContentController
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = MonacoHostingWebView(frame: .zero, configuration: config)
+        webView.onClickRequestFocus = { [weak coordinator = context.coordinator] in
+            coordinator?.requestExternalFocusAcknowledgement()
+        }
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsBackForwardNavigationGestures = false
         webView.navigationDelegate = context.coordinator
@@ -236,6 +239,11 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         }
     }
 
+    func requestExternalFocusAcknowledgement() {
+        onRequestPanelFocus()
+        focusEditor()
+    }
+
     private func handleViewState(payload: [String: Any]) {
         if let cursor = payload["cursor"] as? [String: Any] {
             if let offset = cursor["offset"] as? Int { panel.cursorLocation = offset }
@@ -260,6 +268,13 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     }
 
     func focusEditor() {
+        guard let webView else { return }
+        // Make the WKWebView the AppKit first responder so Cmd+A, Cmd+C, arrow
+        // navigation, etc. reach Monaco. Without this the webview receives no
+        // key events even though it is mounted and visible.
+        if webView.window?.firstResponder !== webView {
+            webView.window?.makeFirstResponder(webView)
+        }
         guard isReady else { return }
         send(command: [
             "kind": "focus",
@@ -298,6 +313,8 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             "isDark": palette.isDark,
             "backgroundHex": palette.backgroundHex,
             "foregroundHex": palette.foregroundHex,
+            "fontFamily": palette.fontFamily,
+            "fontSize": palette.fontSize,
         ]
         if let cursor = palette.cursorHex { payload["cursorHex"] = cursor }
         if let selection = palette.selectionBackgroundHex { payload["selectionBackgroundHex"] = selection }
@@ -311,6 +328,28 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
               let json = String(data: data, encoding: .utf8) else { return }
         let script = "window.cmuxMonaco && window.cmuxMonaco.apply(\(json));"
         webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+}
+
+// MARK: - Custom WKWebView host
+
+/// `WKWebView` subclass used by the Monaco panel. Ensures we always become the
+/// AppKit first responder on mouseDown so Cmd+A, Cmd+C, arrow keys, etc. reach
+/// Monaco inside the WKWebView, and forwards a callback to the SwiftUI side
+/// for panel-focus bookkeeping.
+final class MonacoHostingWebView: WKWebView {
+    var onClickRequestFocus: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
+        onClickRequestFocus?()
+        super.mouseDown(with: event)
     }
 }
 
@@ -444,14 +483,18 @@ struct MonacoPalette {
     /// ANSI indices 0..15 as lowercase `#rrggbb`. Empty when Ghostty hasn't
     /// provided a palette (falls back to Monaco built-in theme colors).
     let ansi: [String]?
+    let fontFamily: String
+    let fontSize: Double
 }
 
 enum MonacoThemeResolver {
     /// Build a MonacoPalette from the currently loaded GhosttyConfig so
-    /// Monaco matches the terminal surfaces visually.
+    /// Monaco matches the terminal surfaces visually. Force-refreshes the
+    /// cache so theme switches in ~/.config/ghostty/config are picked up
+    /// immediately after `ghosttyConfigDidReload`.
     @MainActor
     static func currentPalette() -> MonacoPalette {
-        let config = GhosttyConfig.load()
+        let config = GhosttyConfig.load(useCache: false)
         let isDark = !config.backgroundColor.isLightColor
         let bg = config.backgroundColor.hexString()
         let fg = config.foregroundColor.hexString()
@@ -468,13 +511,22 @@ enum MonacoThemeResolver {
             ansi.append(color.hexString())
         }
 
+        #if DEBUG
+        NSLog(
+            "monaco.theme bg=%@ fg=%@ isDark=%d ansi=%d font=%@/%.1f",
+            bg, fg, isDark ? 1 : 0, ansi.count, config.fontFamily, Double(config.fontSize)
+        )
+        #endif
+
         return MonacoPalette(
             isDark: isDark,
             backgroundHex: bg,
             foregroundHex: fg,
             cursorHex: cursor,
             selectionBackgroundHex: selection,
-            ansi: ansi.isEmpty ? nil : ansi
+            ansi: ansi.isEmpty ? nil : ansi,
+            fontFamily: config.fontFamily,
+            fontSize: Double(config.fontSize)
         )
     }
 }

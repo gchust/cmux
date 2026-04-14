@@ -48,6 +48,8 @@ export type OutboundCommand =
       selectionBackgroundHex?: string;
       /** Ghostty ANSI palette (indices 0..15), lowercase `#rrggbb` strings. Optional. */
       ansi?: string[];
+      fontFamily?: string;
+      fontSize?: number;
     }
   | {
       kind: "setLanguage";
