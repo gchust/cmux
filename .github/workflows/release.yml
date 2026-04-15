@@ -296,29 +296,18 @@ jobs:
             exit 1
           fi
           APP_PATH="build-universal/Build/Products/Release/cmux.app"
-          # AuthenticationServices refuses restricted entitlements like
-          # WebAuthn with error 1004 unless the signed entitlements
-          # carry a matching com.apple.application-identifier. Inject
-          # it (and team-identifier) for the release bundle here.
-          RELEASE_ENT="$(mktemp /tmp/cmux-release-ent.XXXXXX.plist)"
-          trap 'rm -f "$RELEASE_ENT"' EXIT
-          cp cmux.entitlements "$RELEASE_ENT"
-          /usr/libexec/PlistBuddy -c "Delete :com.apple.application-identifier" "$RELEASE_ENT" >/dev/null 2>&1 || true
-          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.team-identifier" "$RELEASE_ENT" >/dev/null 2>&1 || true
-          /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string 7WLXT3NR37.com.cmuxterm.app" "$RELEASE_ENT"
-          /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string 7WLXT3NR37" "$RELEASE_ENT"
+          ENTITLEMENTS="cmux.entitlements"
           CLI_PATH="$APP_PATH/Contents/Resources/bin/cmux"
           HELPER_PATH="$APP_PATH/Contents/Resources/bin/ghostty"
           if [ -f "$CLI_PATH" ]; then
-            /usr/bin/codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" --entitlements "$RELEASE_ENT" "$CLI_PATH"
+            /usr/bin/codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" --entitlements "$ENTITLEMENTS" "$CLI_PATH"
           fi
           if [ -f "$HELPER_PATH" ]; then
-            /usr/bin/codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" --entitlements "$RELEASE_ENT" "$HELPER_PATH"
+            /usr/bin/codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" --entitlements "$ENTITLEMENTS" "$HELPER_PATH"
           fi
-          /usr/bin/codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" --entitlements "$RELEASE_ENT" --deep "$APP_PATH"
+          /usr/bin/codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" --entitlements "$ENTITLEMENTS" --deep "$APP_PATH"
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           /usr/bin/codesign -d --entitlements :- "$APP_PATH" 2>&1 | grep -q "com.apple.developer.web-browser.public-key-credential"
-          /usr/bin/codesign -d --entitlements :- "$APP_PATH" 2>&1 | grep -q "7WLXT3NR37.com.cmuxterm.app"
 
       - name: Notarize app
         if: steps.guard_release_assets.outputs.skip_all != 'true'
