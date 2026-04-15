@@ -21128,6 +21128,40 @@
         }
       }
     },
+    "command.reopenPreviousSession.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "セッション"
+          }
+        }
+      }
+    },
+    "command.reopenPreviousSession.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reopen Previous Session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前回のセッションを再度開く"
+          }
+        }
+      }
+    },
     "command.restartSocketListener.subtitle": {
       "extractionState": "manual",
       "localizations": {
@@ -38822,6 +38856,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Відновити закриту панель браузера"
+          }
+        }
+      }
+    },
+    "menu.file.reopenPreviousSession": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reopen Previous Session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前回のセッションを再度開く"
           }
         }
       }
@@ -68167,6 +68218,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Перейменувати робочу область"
+          }
+        }
+      }
+    },
+    "shortcut.reopenPreviousSession.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reopen Previous Session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前回のセッションを再度開く"
           }
         }
       }

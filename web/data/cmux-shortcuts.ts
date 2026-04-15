@@ -48,6 +48,11 @@ export const shortcutCategories: ShortcutCategory[] = [
       { id: "newTab", combos: [["⌘", "N"]], description: { en: "New workspace", ja: "新規ワークスペース" } },
       { id: "openFolder", combos: [["⌘", "O"]], description: { en: "Open folder", ja: "フォルダを開く" } },
       {
+        id: "reopenPreviousSession",
+        combos: [["⌘", "⇧", "O"]],
+        description: { en: "Reopen previous session", ja: "前回のセッションを再度開く" },
+      },
+      {
         id: "goToWorkspace",
         combos: [["⌘", "P"]],
         description: { en: "Go to workspace", ja: "ワークスペースへ移動" },

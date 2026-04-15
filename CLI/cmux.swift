@@ -1752,6 +1752,16 @@ struct CMUXCLI {
             return
         }
 
+        if command == "restore-session" {
+            try runRestoreSession(
+                commandArgs: commandArgs,
+                socketPath: resolvedSocketPath,
+                explicitPassword: socketPasswordArg,
+                jsonOutput: jsonOutput
+            )
+            return
+        }
+
         if command == "feedback" {
             try runFeedback(
                 commandArgs: commandArgs,
@@ -3137,6 +3147,45 @@ struct CMUXCLI {
             "target": "keyboardShortcuts",
             "activate": true,
         ])
+        if jsonOutput {
+            print(jsonString(response))
+        } else {
+            print("OK")
+        }
+    }
+
+    private func runRestoreSession(
+        commandArgs: [String],
+        socketPath: String,
+        explicitPassword: String?,
+        jsonOutput: Bool
+    ) throws {
+        let remaining = commandArgs.filter { $0 != "--" }
+        if let unknown = remaining.first {
+            throw CLIError(message: "restore-session: unknown flag '\(unknown)'")
+        }
+
+        let client = SocketClient(path: socketPath)
+        if (try? client.connect()) == nil {
+            client.close()
+            try launchApp()
+            try activateApp()
+            if jsonOutput {
+                print(jsonString(["restored": true, "launched": true]))
+            } else {
+                print("OK")
+            }
+            return
+        }
+
+        defer { client.close() }
+        try authenticateClientIfNeeded(
+            client,
+            explicitPassword: explicitPassword,
+            socketPath: socketPath
+        )
+
+        let response = try client.sendV2(method: "session.restore_previous")
         if jsonOutput {
             print(jsonString(response))
         } else {
@@ -6837,6 +6886,15 @@ struct CMUXCLI {
             Usage: cmux shortcuts
 
             Open the Settings window to Keyboard Shortcuts.
+            """
+        case "restore-session":
+            return """
+            Usage: cmux restore-session
+
+            Reopen the previous saved cmux session.
+
+            If the app is already running, this restores the last saved session into the current app.
+            If the app is not running, this launches cmux and lets startup restore reopen the saved session.
             """
         case "feedback":
             return """
@@ -14351,6 +14409,7 @@ struct CMUXCLI {
         Commands:
           welcome
           shortcuts
+          restore-session
           feedback [--email <email> --body <text> [--image <path> ...]]
           themes [list|set|clear]
           claude-teams [claude-args...]

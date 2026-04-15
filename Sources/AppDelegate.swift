@@ -2428,7 +2428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var startupSessionSnapshot: AppSessionSnapshot?
     private var didPrepareStartupSessionSnapshot = false
     private var didAttemptStartupSessionRestore = false
-    private var isApplyingStartupSessionRestore = false
+    private var isApplyingSessionRestore = false
     private var sessionAutosaveTimer: DispatchSourceTimer?
     private var sessionAutosaveTickInFlight = false
     private var sessionAutosaveDeferredRetryPending = false
@@ -3777,8 +3777,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func prepareStartupSessionSnapshotIfNeeded() {
         guard !didPrepareStartupSessionSnapshot else { return }
         didPrepareStartupSessionSnapshot = true
-        guard SessionRestorePolicy.shouldAttemptRestore() else { return }
         Self.removeLegacyPersistedWindowGeometry()
+        SessionPersistenceStore.syncManualRestoreSnapshotCache()
+        guard SessionRestorePolicy.shouldAttemptRestore() else { return }
         startupSessionSnapshot = SessionPersistenceStore.load()
     }
 
@@ -3873,7 +3874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let startupSnapshot = startupSessionSnapshot
         let primaryWindowSnapshot = startupSnapshot?.windows.first
         if let primaryWindowSnapshot {
-            isApplyingStartupSessionRestore = true
+            isApplyingSessionRestore = true
 #if DEBUG
             dlog(
                 "session.restore.start windows=\(startupSnapshot?.windows.count ?? 0) " +
@@ -3920,18 +3921,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     for windowSnapshot in additionalWindows {
                         _ = self.createMainWindow(sessionWindowSnapshot: windowSnapshot)
                     }
-                    self.completeStartupSessionRestore()
+                    self.completeSessionRestoreOperation()
                 }
             } else {
-                completeStartupSessionRestore()
+                completeSessionRestoreOperation()
             }
         }
     }
 
-    private func completeStartupSessionRestore() {
+    private func completeSessionRestoreOperation() {
         startupSessionSnapshot = nil
-        isApplyingStartupSessionRestore = false
+        isApplyingSessionRestore = false
         _ = saveSessionSnapshot(includeScrollback: false)
+    }
+
+    @discardableResult
+    func reopenPreviousSession() -> Bool {
+        guard let snapshot = SessionPersistenceStore.loadReopenSessionSnapshot() else {
+            return false
+        }
+
+        let snapshotWindows = Array(
+            snapshot.windows.prefix(SessionPersistencePolicy.maxWindowsPerSnapshot)
+        )
+        guard !snapshotWindows.isEmpty else { return false }
+
+        let existingContexts = sortedMainWindowContextsForSessionSnapshot()
+        isApplyingSessionRestore = true
+
+        if existingContexts.isEmpty {
+            for windowSnapshot in snapshotWindows {
+                _ = createMainWindow(sessionWindowSnapshot: windowSnapshot)
+            }
+        } else {
+            for (context, windowSnapshot) in zip(existingContexts, snapshotWindows) {
+                applySessionWindowSnapshot(
+                    windowSnapshot,
+                    to: context,
+                    window: context.window ?? windowForMainWindowId(context.windowId)
+                )
+            }
+
+            if snapshotWindows.count > existingContexts.count {
+                for windowSnapshot in snapshotWindows.dropFirst(existingContexts.count) {
+                    _ = createMainWindow(sessionWindowSnapshot: windowSnapshot)
+                }
+            }
+        }
+
+        completeSessionRestoreOperation()
+
+        if let primaryWindow = sortedMainWindowContextsForSessionSnapshot()
+            .compactMap({ $0.window ?? windowForMainWindowId($0.windowId) })
+            .first {
+            primaryWindow.makeKeyAndOrderFront(nil)
+            setActiveMainWindow(primaryWindow)
+            NSRunningApplication.current.activate(
+                options: [.activateAllWindows, .activateIgnoringOtherApps]
+            )
+        }
+
+        return true
     }
 
     private func applySessionWindowSnapshot(
@@ -4455,12 +4505,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @discardableResult
     private func saveSessionSnapshot(includeScrollback: Bool, removeWhenEmpty: Bool = false) -> Bool {
-        if Self.shouldSkipSessionSaveDuringStartupRestore(
-            isApplyingStartupSessionRestore: isApplyingStartupSessionRestore,
+        if Self.shouldSkipSessionSaveDuringRestore(
+            isApplyingSessionRestore: isApplyingSessionRestore,
             includeScrollback: includeScrollback
         ) {
 #if DEBUG
-            dlog("session.save.skipped reason=startup_restore_in_progress includeScrollback=0")
+            dlog("session.save.skipped reason=session_restore_in_progress includeScrollback=0")
 #endif
             return false
         }
@@ -4519,11 +4569,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         !isTerminatingApp
     }
 
-    nonisolated static func shouldSkipSessionSaveDuringStartupRestore(
-        isApplyingStartupSessionRestore: Bool,
+    nonisolated static func shouldSkipSessionSaveDuringRestore(
+        isApplyingSessionRestore: Bool,
         includeScrollback: Bool
     ) -> Bool {
-        isApplyingStartupSessionRestore && !includeScrollback
+        isApplyingSessionRestore && !includeScrollback
     }
 
     nonisolated static func shouldRunSessionAutosaveTick(isTerminatingApp: Bool) -> Bool {
@@ -4715,8 +4765,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    private func buildSessionSnapshot(includeScrollback: Bool) -> AppSessionSnapshot? {
-        let contexts = mainWindowContexts.values.sorted { lhs, rhs in
+    private func sortedMainWindowContextsForSessionSnapshot() -> [MainWindowContext] {
+        mainWindowContexts.values.sorted { lhs, rhs in
             let lhsWindow = lhs.window ?? windowForMainWindowId(lhs.windowId)
             let rhsWindow = rhs.window ?? windowForMainWindowId(rhs.windowId)
             let lhsIsKey = lhsWindow?.isKeyWindow ?? false
@@ -4726,8 +4776,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             return lhs.windowId.uuidString < rhs.windowId.uuidString
         }
+    }
+
+    private func buildSessionSnapshot(includeScrollback: Bool) -> AppSessionSnapshot? {
+        let contexts = sortedMainWindowContextsForSessionSnapshot()
 
         guard !contexts.isEmpty else { return nil }
+        let restorableAgentIndex = RestorableAgentSessionIndex.load()
 
         let windows: [SessionWindowSnapshot] = contexts
             .prefix(SessionPersistencePolicy.maxWindowsPerSnapshot)
@@ -4736,7 +4791,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 return SessionWindowSnapshot(
                     frame: window.map { SessionRectSnapshot($0.frame) },
                     display: displaySnapshot(for: window),
-                    tabManager: context.tabManager.sessionSnapshot(includeScrollback: includeScrollback),
+                    tabManager: context.tabManager.sessionSnapshot(
+                        includeScrollback: includeScrollback,
+                        restorableAgentIndex: restorableAgentIndex
+                    ),
                     sidebar: SessionSidebarSnapshot(
                         isVisible: context.sidebarState.isVisible,
                         selection: SessionSidebarSelection(selection: context.sidebarSelectionState.selection),
@@ -11527,6 +11585,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         if matchConfiguredShortcut(event: event, action: .useSelectionForFind) {
             tabManager?.searchSelection()
+            return true
+        }
+
+        if matchConfiguredShortcut(event: event, action: .reopenPreviousSession) {
+            if !reopenPreviousSession() {
+                NSSound.beep()
+            }
             return true
         }
 
