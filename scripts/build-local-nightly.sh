@@ -44,13 +44,15 @@ fi
 
 cd "$REPO_ROOT"
 
-echo "==> Building Release ($ARCHS) into $BUILD_DIR"
+echo "==> Building Release with DEBUG conditionals ($ARCHS) into $BUILD_DIR"
 xcodebuild -scheme cmux -configuration Release -derivedDataPath "$BUILD_DIR" \
   -destination 'generic/platform=macOS' \
   ARCHS="$ARCHS" \
   ONLY_ACTIVE_ARCH=NO \
   CODE_SIGNING_ALLOWED=NO \
   ASSETCATALOG_COMPILER_APPICON_NAME=AppIcon-Nightly \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS="DEBUG" \
+  GCC_PREPROCESSOR_DEFINITIONS="DEBUG=1 \$(inherited)" \
   build
 
 APP_DIR="$BUILD_DIR/Build/Products/Release"
