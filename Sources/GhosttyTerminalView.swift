@@ -4687,12 +4687,24 @@ final class TerminalSurface: Identifiable, ObservableObject {
         let scale = max(view.window?.backingScaleFactor ?? 2.0, 1.0)
         let widthPts = CGFloat(pinnedPxW) / scale
         let heightPts = CGFloat(pinnedPxH) / scale
-        let bounds = view.bounds
+        // Clamp against the un-letterboxed container, NOT surfaceView's own
+        // bounds. After a prior small pin shrank surfaceView.frame, its
+        // bounds reflect that shrunken size — using it here would clamp a
+        // newly-grown pin back to the old small rect, trapping the terminal
+        // at its smallest historical size even when the daemon broadcasts a
+        // larger effective grid. The enclosing scroll view (or hostedView
+        // if unattached) always reports the true container capacity.
+        let clampBounds: CGRect = {
+            if let scroll = view.enclosingScrollView {
+                return scroll.bounds
+            }
+            return hostedView.bounds
+        }()
         let rect = CGRect(
             x: 0,
             y: 0,
-            width: min(widthPts, bounds.width.isFinite ? bounds.width : widthPts),
-            height: min(heightPts, bounds.height.isFinite ? bounds.height : heightPts)
+            width: min(widthPts, clampBounds.width.isFinite && clampBounds.width > 0 ? clampBounds.width : widthPts),
+            height: min(heightPts, clampBounds.height.isFinite && clampBounds.height > 0 ? clampBounds.height : heightPts)
         )
         view.letterboxRect = rect
         #if DEBUG
@@ -9593,7 +9605,13 @@ final class GhosttySurfaceScrollView: NSView {
         } else {
             targetSurfaceFrame = CGRect(origin: surfaceView.frame.origin, size: targetSize)
         }
+        #if DEBUG
+        let prevFrame = surfaceView.frame
+        #endif
         _ = setFrameIfNeeded(surfaceView, to: targetSurfaceFrame)
+        #if DEBUG
+        dlog("geom.sync surface=\(surfaceView.terminalSurface?.id.uuidString.prefix(8) ?? "nil") target=\(String(format: "%.1fx%.1f@(%.1f,%.1f)", targetSurfaceFrame.width, targetSurfaceFrame.height, targetSurfaceFrame.minX, targetSurfaceFrame.minY)) newFrame=\(String(format: "%.1fx%.1f@(%.1f,%.1f)", surfaceView.frame.width, surfaceView.frame.height, surfaceView.frame.minX, surfaceView.frame.minY)) prevFrame=\(String(format: "%.1fx%.1f@(%.1f,%.1f)", prevFrame.width, prevFrame.height, prevFrame.minX, prevFrame.minY)) pin=\(surfaceView.letterboxRect.map { "\($0.width)x\($0.height)" } ?? "nil") scrollBounds=\(String(format: "%.1fx%.1f", targetSize.width, targetSize.height)) hostBounds=\(String(format: "%.1fx%.1f", bounds.width, bounds.height))")
+        #endif
         updateLetterboxBorderLayer(around: surfaceView)
         let targetDocumentFrame = CGRect(
             origin: documentView.frame.origin,
