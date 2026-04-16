@@ -265,21 +265,6 @@ final class DaemonConnection: @unchecked Sendable {
                let r = resp["result"] as? [String: Any],
                let sid = r["session_id"] as? String,
                let pid = r["pane_id"] as? String {
-                // Daemon's workspace.open_pane response includes a bootstrap
-                // attachment_id at the cols×rows we requested. It's exactly
-                // the same pattern as terminal.open's bootstrap: held only so
-                // the session has at least one attachment during spawn. If
-                // we leave it alive, min-of-clients aggregation is pinned to
-                // our request-time defaults (80×24) until the bootstrap is
-                // manually detached, which never happens — it's invisible
-                // to later terminal.unsubscribe. Detach it eagerly so the
-                // real subscription's session.resize can drive effective.
-                if let bootstrap = r["attachment_id"] as? String, !bootstrap.isEmpty {
-                    self?.sendRPCAsync(method: "session.detach", params: [
-                        "session_id": sid,
-                        "attachment_id": bootstrap,
-                    ], completion: nil)
-                }
                 completion(sid, pid)
                 return
             }
