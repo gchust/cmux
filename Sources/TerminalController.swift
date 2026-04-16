@@ -5599,6 +5599,7 @@ class TerminalController {
                     "runtime_surface_created_at": v2OrNull(iso8601String(terminalSurface.debugRuntimeSurfaceCreatedAt())),
                     "runtime_surface_age_seconds": v2OrNull(ageSeconds(since: terminalSurface.debugRuntimeSurfaceCreatedAt())),
                     "WorkspaceSplit_tab_id": v2OrNull(mapped?.splitTabId?.uuid.uuidString),
+                    "workspacesplit_tab_id": v2OrNull(mapped?.splitTabId?.uuid.uuidString),
                     // Backward-compatible alias for existing CLI tooling.
                     "bonsplit_tab_id": v2OrNull(mapped?.splitTabId?.uuid.uuidString),
                     "terminal_object_ptr": objectPointerString(terminalSurface),
