@@ -1594,7 +1594,7 @@ func workspaceSplitContextMenuState(
     canMoveToRightPane: Bool,
     isZoomed: Bool,
     hasSplits: Bool,
-    shortcuts: TabContextMenuShortcuts
+    shortcuts: [TabContextAction: KeyboardShortcut]
 ) -> TabContextMenuState {
     let leftTabs = tabs.prefix(index)
     let canCloseToLeft = leftTabs.contains(where: { !$0.isPinned })
