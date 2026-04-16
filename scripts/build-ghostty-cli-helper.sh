@@ -100,9 +100,34 @@ if [[ ! -f "$GHOSTTY_DIR/build.zig" ]]; then
   exit 1
 fi
 
+ghostty_version_string_override() {
+  local exact_tag=""
+  exact_tag="$(git -C "$GHOSTTY_DIR" describe --exact-match --tags 2>/dev/null || true)"
+  if [[ -z "$exact_tag" ]]; then
+    return 0
+  fi
+
+  case "$exact_tag" in
+    tip|v[0-9]*.[0-9]*.[0-9]*)
+      return 0
+      ;;
+  esac
+
+  # Ghostty treats any exact tag as a release tag unless an explicit version is
+  # provided. Our checkout is often pinned at internal cache tags such as
+  # `xcframework-<sha>`, which are not valid Ghostty release versions and cause
+  # the helper build to panic. In that case, force the build.zig.zon version so
+  # the helper stays on the normal dev-build path.
+  sed -n -E 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
+    "$GHOSTTY_DIR/build.zig.zon" \
+    | head -n 1
+}
+
 build_helper() {
   local prefix="$1"
   local target="${2:-}"
+  local version_override
+  version_override="$(ghostty_version_string_override)"
   local args=(
     zig build
     cli-helper
@@ -116,6 +141,9 @@ build_helper() {
 
   if [[ -n "$target" ]]; then
     args+=("-Dtarget=$target")
+  fi
+  if [[ -n "$version_override" ]]; then
+    args+=("-Dversion-string=$version_override")
   fi
 
   (

@@ -308,6 +308,11 @@ XCODEBUILD_ARGS=(
   -configuration Debug
   -destination 'platform=macOS'
 )
+XCODEBUILD_ENV=(env)
+CLANG_WRAPPER="$PWD/scripts/clang-xcodebuild-wrapper.sh"
+if [[ -x "$CLANG_WRAPPER" ]]; then
+  XCODEBUILD_ENV+=(CC="$CLANG_WRAPPER" CXX="$CLANG_WRAPPER")
+fi
 if [[ -n "$DERIVED_DATA" ]]; then
   XCODEBUILD_ARGS+=(-derivedDataPath "$DERIVED_DATA")
 fi
@@ -327,7 +332,7 @@ XCODEBUILD_ARGS+=(build)
 
 XCODE_LOG="/tmp/cmux-xcodebuild-${TAG_SLUG}.log"
 set +e
-xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tee "$XCODE_LOG" | grep -E '(warning:|error:|fatal:|BUILD FAILED|BUILD SUCCEEDED|\*\* BUILD)'
+"${XCODEBUILD_ENV[@]}" xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tee "$XCODE_LOG" | grep -E '(warning:|error:|fatal:|BUILD FAILED|BUILD SUCCEEDED|\*\* BUILD)'
 XCODE_PIPESTATUS=("${PIPESTATUS[@]}")
 set -e
 XCODE_EXIT="${XCODE_PIPESTATUS[0]}"
@@ -450,30 +455,20 @@ if [[ -x "$CLI_PATH" ]]; then
   fi
 fi
 
-# Build cmuxd and ghostty helper binaries (needed for both launch and no-launch).
+# Copy optional local cmuxd into the app bundle when that checkout exists.
+# The Ghostty CLI helper is already built by the Xcode Run Script phase for the
+# requested app ARCHS. Do not rebuild/overwrite it here: host-native zig output
+# can silently corrupt cross-arch debug builds (for example, an x86_64 app that
+# gets an arm64-only helper copied into its bundle afterward).
 CMUXD_SRC="$PWD/cmuxd/zig-out/bin/cmuxd"
-GHOSTTY_HELPER_SRC="$PWD/ghostty/zig-out/bin/ghostty"
 if [[ -d "$PWD/cmuxd" ]]; then
   (cd "$PWD/cmuxd" && zig build -Doptimize=ReleaseFast)
-fi
-if [[ -d "$PWD/ghostty" ]]; then
-  if [[ "${CMUX_SKIP_ZIG_BUILD:-}" == "1" ]]; then
-    echo "Skipping direct ghostty CLI helper zig build (CMUX_SKIP_ZIG_BUILD=1)"
-  else
-    (cd "$PWD/ghostty" && zig build cli-helper -Dapp-runtime=none -Demit-macos-app=false -Demit-xcframework=false -Doptimize=ReleaseFast)
-  fi
 fi
 if [[ -x "$CMUXD_SRC" ]]; then
   BIN_DIR="$APP_PATH/Contents/Resources/bin"
   mkdir -p "$BIN_DIR"
   cp "$CMUXD_SRC" "$BIN_DIR/cmuxd"
   chmod +x "$BIN_DIR/cmuxd"
-fi
-if [[ -x "$GHOSTTY_HELPER_SRC" ]]; then
-  BIN_DIR="$APP_PATH/Contents/Resources/bin"
-  mkdir -p "$BIN_DIR"
-  cp "$GHOSTTY_HELPER_SRC" "$BIN_DIR/ghostty"
-  chmod +x "$BIN_DIR/ghostty"
 fi
 CLI_PATH="$APP_PATH/Contents/Resources/bin/cmux"
 if [[ -x "$CLI_PATH" ]]; then

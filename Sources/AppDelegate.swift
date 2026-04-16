@@ -2234,6 +2234,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lifecycleSnapshotObservers: [NSObjectProtocol] = []
     private var windowKeyObserver: NSObjectProtocol?
     private var shortcutMonitor: Any?
+#if DEBUG
+    private var clickInspectMonitor: Any?
+#endif
     private var shortcutDefaultsObserver: NSObjectProtocol?
     private var menuBarVisibilityObserver: NSObjectProtocol?
     private var splitButtonTooltipRefreshScheduled = false
@@ -2592,6 +2595,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         installWindowResponderSwizzles()
         installBrowserAddressBarFocusObservers()
         installShortcutMonitor()
+#if DEBUG
+        installClickInspectMonitor()
+#endif
         installShortcutDefaultsObserver()
         NSApp.servicesProvider = self
 #if DEBUG
@@ -10258,6 +10264,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return event
         }
     }
+
+#if DEBUG
+    private func installClickInspectMonitor() {
+        guard clickInspectMonitor == nil else { return }
+        clickInspectMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
+            guard let window = event.window else { return event }
+            let windowPoint = event.locationInWindow
+            let hitView = window.contentView?.hitTest(windowPoint)
+            let hitClass = hitView.map { String(describing: type(of: $0)) } ?? "nil"
+            var ancestorClasses: [String] = []
+            var current: NSView? = hitView
+            var depth = 0
+            while let v = current, depth < 10 {
+                ancestorClasses.append(String(describing: type(of: v)))
+                current = v.superview
+                depth += 1
+            }
+            let chain = ancestorClasses.joined(separator: " <- ")
+            dlog(
+                "click.left x=\(Int(windowPoint.x)) y=\(Int(windowPoint.y)) " +
+                "hit=\(hitClass) chain=[\(chain)]"
+            )
+            return event
+        }
+    }
+#endif
 
     private func installShortcutDefaultsObserver() {
         guard shortcutDefaultsObserver == nil else { return }
