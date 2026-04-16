@@ -448,6 +448,7 @@ struct ServerScannerView: View {
 struct ScannerLogView: View {
     @State private var logText = ScannerLog.shared.allEntries()
     @State private var copied = false
+    @State private var copiedResetTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -465,7 +466,12 @@ struct ScannerLogView: View {
                     Button {
                         UIPasteboard.general.string = logText
                         copied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                        copiedResetTask?.cancel()
+                        copiedResetTask = Task {
+                            try? await Task.sleep(for: .seconds(2))
+                            guard !Task.isCancelled else { return }
+                            copied = false
+                        }
                     } label: {
                         Label(
                             copied ? String(localized: "server.scan.logs.copied", defaultValue: "Copied") : String(localized: "server.scan.logs.copy", defaultValue: "Copy"),
