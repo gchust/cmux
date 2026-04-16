@@ -7527,13 +7527,6 @@ final class Workspace: Identifiable, ObservableObject {
         return rendered
     }
 
-    func renderTabChrome(for tab: WorkspaceLayout.Tab) -> WorkspaceLayout.Tab {
-        renderTabChrome(
-            for: tab,
-            using: makeTabChromeProjectionState(notificationStore: AppDelegate.shared?.notificationStore)
-        )
-    }
-
     private func makePaneContentDescriptor(
         for tab: WorkspaceLayout.Tab,
         in paneId: PaneID,

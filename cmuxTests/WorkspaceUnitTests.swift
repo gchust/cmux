@@ -2222,6 +2222,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         workspace.setPanelCustomTitle(panelId: panelId, title: "custom title")
         workspace.setPanelPinned(panelId: panelId, pinned: true)
         workspace.markPanelUnread(panelId)
+        let projectionState = workspace.makeTabChromeProjectionState(notificationStore: nil)
 
         let rendered = workspace.renderTabChrome(
             for: WorkspaceLayout.Tab(
@@ -2235,7 +2236,8 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
                 showsNotificationBadge: false,
                 isLoading: true,
                 isPinned: false
-            )
+            ),
+            using: projectionState
         )
 
         XCTAssertEqual(rendered.id.id, panelId)
@@ -2265,7 +2267,13 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             isPinned: true
         )
 
-        XCTAssertEqual(workspace.renderTabChrome(for: tab), tab)
+        XCTAssertEqual(
+            workspace.renderTabChrome(
+                for: tab,
+                using: workspace.makeTabChromeProjectionState(notificationStore: nil)
+            ),
+            tab
+        )
     }
 
     func testTabChromeProjectionStateReflectsUpdatedPanelTitle() {
@@ -2322,10 +2330,13 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         workspace.setPanelCustomTitle(panelId: panelId, title: "Snapshot custom title")
         workspace.setPanelPinned(panelId: panelId, pinned: true)
         workspace.markPanelUnread(panelId)
+        let projectionState = workspace.makeTabChromeProjectionState(notificationStore: nil)
 
         let snapshot = workspaceLayoutMakeRenderSnapshot(
             controller: workspace.splitController,
-            tabChromeBuilder: { tab, _ in workspace.renderTabChrome(for: tab) },
+            tabChromeBuilder: { tab, _ in
+                workspace.renderTabChrome(for: tab, using: projectionState)
+            },
             paneContentBuilder: { _, paneId in
                 .placeholder(
                     WorkspacePlaceholderPaneContent(
