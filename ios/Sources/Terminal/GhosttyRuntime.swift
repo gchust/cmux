@@ -1,5 +1,8 @@
 import Foundation
+import OSLog
 import UIKit
+
+private let log = Logger(subsystem: "ai.manaflow.cmux.ios", category: "ghostty.runtime")
 
 @MainActor
 final class GhosttyRuntime {
@@ -58,11 +61,11 @@ final class GhosttyRuntime {
 
         #if DEBUG
         let diagCount = Int(ghostty_config_diagnostics_count(config))
-        NSLog("📱 GhosttyRuntime: config loaded, %d diagnostics", diagCount)
+        log.debug("config loaded, \(diagCount, privacy: .public) diagnostics")
         for i in 0..<diagCount {
             let diag = ghostty_config_get_diagnostic(config, UInt32(i))
             if let msg = diag.message {
-                NSLog("📱 GhosttyRuntime: diag[%d] = %@", i, String(cString: msg))
+                log.debug("diag[\(i, privacy: .public)] = \(String(cString: msg), privacy: .public)")
             }
         }
 
@@ -70,12 +73,12 @@ final class GhosttyRuntime {
         var bgColor = ghostty_config_color_s()
         let bgKey = "background"
         let hasBg = ghostty_config_get(config, &bgColor, bgKey, UInt(bgKey.lengthOfBytes(using: .utf8)))
-        NSLog("📱 GhosttyRuntime: background config get=%d r=%d g=%d b=%d", hasBg ? 1 : 0, bgColor.r, bgColor.g, bgColor.b)
+        log.debug("background config get=\(hasBg, privacy: .public) r=\(bgColor.r, privacy: .public) g=\(bgColor.g, privacy: .public) b=\(bgColor.b, privacy: .public)")
 
         var fontSize: Float64 = 0
         let fontKey = "font-size"
         let hasFont = ghostty_config_get(config, &fontSize, fontKey, UInt(fontKey.lengthOfBytes(using: .utf8)))
-        NSLog("📱 GhosttyRuntime: font-size config get=%d value=%f", hasFont ? 1 : 0, fontSize)
+        log.debug("font-size config get=\(hasFont, privacy: .public) value=\(fontSize, privacy: .public)")
         #endif
 
         var runtimeConfig = ghostty_runtime_config_s(
@@ -157,7 +160,7 @@ final class GhosttyRuntime {
             ?? FileManager.default.temporaryDirectory
         setenv("XDG_CONFIG_HOME", appSupport.path, 0)
         if let env = getenv("XDG_CONFIG_HOME") {
-            NSLog("📱 XDG_CONFIG_HOME=%@", String(cString: env))
+            log.debug("XDG_CONFIG_HOME=\(String(cString: env), privacy: .public)")
         }
     }
 
@@ -199,13 +202,13 @@ final class GhosttyRuntime {
             }
             try FileManager.default.removeItem(at: tmpFile)
         } catch {
-            NSLog("📱 applyiOSDefaults: failed to write config: %@", error.localizedDescription)
+            log.error("applyiOSDefaults: failed to write config: \(error.localizedDescription, privacy: .public)")
         }
 
         var bgColor = ghostty_config_color_s()
         let bgKey2 = "background"
         let hasBg = ghostty_config_get(config, &bgColor, bgKey2, UInt(bgKey2.lengthOfBytes(using: .utf8)))
-        NSLog("📱 applyiOSDefaults: bg get=%d r=%d g=%d b=%d", hasBg ? 1 : 0, bgColor.r, bgColor.g, bgColor.b)
+        log.debug("applyiOSDefaults: bg get=\(hasBg, privacy: .public) r=\(bgColor.r, privacy: .public) g=\(bgColor.g, privacy: .public) b=\(bgColor.b, privacy: .public)")
     }
 
     private static func ensureDefaultiOSConfig() {
@@ -248,7 +251,7 @@ final class GhosttyRuntime {
             try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
             try defaultConfig.write(to: configFile, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("📱 ensureDefaultiOSConfig: failed: %@", error.localizedDescription)
+            log.error("ensureDefaultiOSConfig: failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

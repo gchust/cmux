@@ -1,4 +1,7 @@
+import OSLog
 import UIKit
+
+private let log = Logger(subsystem: "ai.manaflow.cmux.ios", category: "ghostty.surface")
 
 @MainActor
 protocol GhosttySurfaceViewDelegate: AnyObject {
@@ -630,8 +633,7 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
                 let avg = latencySamples.reduce(0, +) / Double(latencySamples.count)
                 let p50 = sorted[sorted.count / 2]
                 let p95 = sorted[Int(Double(sorted.count) * 0.95)]
-                NSLog("📊 Keypress latency (%d samples): avg=%.1fms p50=%.1fms p95=%.1fms min=%.1fms max=%.1fms",
-                      latencySamples.count, avg, p50, p95, sorted.first!, sorted.last!)
+                log.debug("Keypress latency (\(self.latencySamples.count, privacy: .public) samples): avg=\(avg, privacy: .public)ms p50=\(p50, privacy: .public)ms p95=\(p95, privacy: .public)ms min=\(sorted.first!, privacy: .public)ms max=\(sorted.last!, privacy: .public)ms")
             }
         }
         #endif
@@ -876,12 +878,11 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
             snapshotFallbackView.backgroundColor = bg
             configBackgroundColor = bg
             #if DEBUG
-            NSLog("🎨 GhosttySurfaceView.applyBg: config r=%d g=%d b=%d -> UIColor(%@), hardcoded Monokai=#272822 r=39 g=40 b=34",
-                  bgColor.r, bgColor.g, bgColor.b, bg.debugDescription)
+            log.debug("applyBg: config r=\(bgColor.r, privacy: .public) g=\(bgColor.g, privacy: .public) b=\(bgColor.b, privacy: .public) -> UIColor(\(bg.debugDescription, privacy: .public)), hardcoded Monokai=#272822 r=39 g=40 b=34")
             #endif
         } else {
             #if DEBUG
-            NSLog("🎨 GhosttySurfaceView.applyBg: ghostty_config_get returned false, no bg color from config")
+            log.debug("applyBg: ghostty_config_get returned false, no bg color from config")
             #endif
         }
         var fgColor = ghostty_config_color_s()
@@ -1248,7 +1249,7 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
                     : String(scalar)
             }.joined()
             if escaped.contains("\\x1b]") || escaped.contains("\\x1b[") {
-                NSLog("🎨 io_write OSC/CSI response (%d bytes): %@", bytes.count, escaped)
+                log.debug("io_write OSC/CSI response (\(bytes.count, privacy: .public) bytes): \(escaped, privacy: .public)")
             }
         }
         #endif

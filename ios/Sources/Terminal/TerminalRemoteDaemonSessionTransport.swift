@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let log = Logger(subsystem: "ai.manaflow.cmux.ios", category: "terminal.session-transport")
 
 protocol TerminalRemoteDaemonResumeStateSnapshotting {
     func remoteDaemonResumeStateSnapshot() -> TerminalRemoteDaemonResumeState?
@@ -86,25 +89,25 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
     }
 
     func connect(initialSize: TerminalGridSize) async throws {
-        NSLog("📱 SessionTransport: starting connect")
+        log.debug("Starting connect")
         let hello = try await client.sendHello()
-        NSLog("📱 SessionTransport: hello OK, capabilities=%@", hello.capabilities.joined(separator: ","))
+        log.debug("Hello OK, capabilities=\(hello.capabilities.joined(separator: ","), privacy: .public)")
         guard hello.capabilities.contains("terminal.stream") else {
             throw TerminalRemoteDaemonSessionTransportError.missingCapability("terminal.stream")
         }
 
         try await openOrAttachTerminal(initialSize: initialSize)
-        NSLog("📱 SessionTransport: terminal opened, sessionID=%@", lockedSessionID() ?? "nil")
+        log.debug("Terminal opened, sessionID=\(self.lockedSessionID() ?? "nil", privacy: .public)")
 
         eventHandler?(.connected)
 
         if hello.capabilities.contains("terminal.subscribe"),
            let pushClient = client as? any TerminalRemoteDaemonPushSubscribing {
             try await startPushSubscription(pushClient: pushClient)
-            NSLog("📱 SessionTransport: push subscription active")
+            log.debug("Push subscription active")
         } else {
             startReadLoop()
-            NSLog("📱 SessionTransport: fallback polling read loop started")
+            log.debug("Fallback polling read loop started")
         }
     }
 
@@ -179,7 +182,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
                     cols: cols,
                     rows: rows
                 )
-                NSLog("📱 SessionTransport: attached to shared session %@ as %@", sharedSessionID, stableAttachmentID)
+                log.debug("Attached to shared session \(sharedSessionID, privacy: .public) as \(self.stableAttachmentID, privacy: .public)")
                 withLockedState {
                     sessionID = sharedSessionID
                     attachmentID = stableAttachmentID
@@ -190,7 +193,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
                 return
             } catch let error as TerminalRemoteDaemonClientError {
                 if case .rpc(let code, _) = error, code == "not_found" {
-                    NSLog("📱 SessionTransport: shared session %@ not found, creating", sharedSessionID)
+                    log.debug("Shared session \(sharedSessionID, privacy: .public) not found, creating")
                 } else {
                     throw error
                 }
@@ -375,7 +378,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
         eof: Bool
     ) {
         if truncated {
-            NSLog("📱 SessionTransport: push payload truncated, resetting emulator buffer")
+            log.debug("Push payload truncated, resetting emulator buffer")
             eventHandler?(.notice("Terminal output truncated; buffer reset."))
             // RIS (ESC c) — reset to initial state. Clears emulator screen/scrollback
             // before we feed the post-truncation snapshot.
@@ -390,7 +393,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
         }
 
         if eof {
-            NSLog("📱 SessionTransport: EOF via push for session")
+            log.debug("EOF via push for session")
             clearSessionState()
             finishDisconnect(error: nil)
         }
@@ -417,7 +420,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
                 }
 
                 if result.eof {
-                    NSLog("📱 readLoop: EOF received for session %@, data=%d bytes", state.sessionID, result.data.count)
+                    log.debug("readLoop: EOF received for session \(state.sessionID, privacy: .public), data=\(result.data.count, privacy: .public) bytes")
                     clearSessionState()
                     finishDisconnect(error: nil)
                     return
@@ -426,11 +429,11 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
                 if case .rpc(let code, _) = error, code == "deadline_exceeded" {
                     continue
                 }
-                NSLog("📱 readLoop RPC error: %@", error.localizedDescription ?? "unknown")
+                log.error("readLoop RPC error: \(error.localizedDescription, privacy: .public)")
                 finishDisconnect(error: error.localizedDescription)
                 return
             } catch {
-                NSLog("📱 readLoop error: %@", String(describing: error))
+                log.error("readLoop error: \(String(describing: error), privacy: .public)")
                 finishDisconnect(error: error.localizedDescription)
                 return
             }
