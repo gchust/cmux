@@ -7,7 +7,7 @@ private let log = Logger(subsystem: "ai.manaflow.cmux.ios", category: "content")
 struct ContentView: View {
     private let authManager = AuthManager.shared
     @StateObject private var terminalStore = TerminalSidebarRootView.makeLiveStore()
-    @StateObject private var notificationRouteStore = NotificationRouteStore.shared
+    private let notificationRouteStore = NotificationRouteStore.shared
     private let uiTestTerminalSetupFixture = UITestConfig.terminalSetupFixtureEnabled
     private let uiTestTerminalInputFixture = UITestConfig.terminalInputFixtureEnabled
     private let uiTestTerminalInboxFixture = UITestConfig.terminalInboxFixtureEnabled
@@ -91,7 +91,7 @@ struct SessionRestoreView: View {
 
 struct SettingsView: View {
     private let authManager = AuthManager.shared
-    @StateObject private var notifications = NotificationManager.shared
+    private let notifications = NotificationManager.shared
     @State private var testNotificationAlert: TestNotificationAlert?
 
     var body: some View {

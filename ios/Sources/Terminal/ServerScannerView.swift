@@ -56,9 +56,10 @@ final class ScannerLog: @unchecked Sendable {
 }
 
 @MainActor
-final class ServerScanner: ObservableObject {
-    @Published var servers: [DiscoveredServer] = []
-    @Published var isScanning = false
+@Observable
+final class ServerScanner {
+    var servers: [DiscoveredServer] = []
+    var isScanning = false
     private(set) var currentSecret: String = ""
     private var scanTask: Task<Void, Never>?
     private let log = ScannerLog.shared
@@ -298,7 +299,7 @@ final class ServerScanner: ObservableObject {
 }
 
 struct ServerScannerView: View {
-    @StateObject private var scanner = ServerScanner()
+    @State private var scanner = ServerScanner()
     @State private var connectedPorts: Set<Int>
     @State private var showingLogs = false
     @State private var manualIP = ""

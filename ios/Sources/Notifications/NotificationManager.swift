@@ -115,11 +115,12 @@ struct LiveNotificationDeviceInfo: NotificationDeviceInfoProviding {
 }
 
 @MainActor
-final class NotificationManager: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
+@Observable
+final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
 
-    @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
-    @Published private(set) var isRegisteredForRemoteNotifications = false
+    private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
+    private(set) var isRegisteredForRemoteNotifications = false
 
     private let pushSyncer: NotificationPushSyncing
     private let tokenStore: NotificationTokenStoring

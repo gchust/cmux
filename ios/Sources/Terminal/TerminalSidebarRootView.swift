@@ -5,7 +5,7 @@ private let log = Logger(subsystem: "ai.manaflow.cmux.ios", category: "terminal.
 
 struct TerminalSidebarRootView: View {
     @StateObject private var store: TerminalSidebarStore
-    @ObservedObject private var routeStore: NotificationRouteStore
+    private let routeStore: NotificationRouteStore
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var editorDraft: TerminalHostEditorDraft?
@@ -25,7 +25,7 @@ struct TerminalSidebarRootView: View {
         _store = StateObject(
             wrappedValue: store ?? Self.makeLiveStore()
         )
-        _routeStore = ObservedObject(wrappedValue: routeStore ?? NotificationRouteStore.shared)
+        self.routeStore = routeStore ?? NotificationRouteStore.shared
         self.inboxCacheRepository = inboxCacheRepository ?? Self.makeDefaultInboxCacheRepository()
     }
 

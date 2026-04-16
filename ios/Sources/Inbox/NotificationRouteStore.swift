@@ -47,10 +47,11 @@ struct NotificationRoute: Codable, Equatable, Sendable {
 }
 
 @MainActor
-final class NotificationRouteStore: ObservableObject {
+@Observable
+final class NotificationRouteStore {
     static let shared = NotificationRouteStore()
 
-    @Published private(set) var pendingRoute: NotificationRoute?
+    private(set) var pendingRoute: NotificationRoute?
 
     func setPendingRoute(_ route: NotificationRoute?) {
         pendingRoute = route
