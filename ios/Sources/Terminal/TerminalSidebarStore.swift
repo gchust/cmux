@@ -147,10 +147,11 @@ struct LiveTerminalRemoteWorkspaceReadMarker: TerminalRemoteWorkspaceReadMarking
 }
 
 @MainActor
-final class TerminalSidebarStore: ObservableObject {
-    @Published private(set) var hosts: [TerminalHost]
-    @Published private(set) var workspaces: [TerminalWorkspace]
-    @Published var selectedWorkspaceID: TerminalWorkspace.ID?
+@Observable
+final class TerminalSidebarStore {
+    private(set) var hosts: [TerminalHost]
+    private(set) var workspaces: [TerminalWorkspace]
+    var selectedWorkspaceID: TerminalWorkspace.ID?
 
     private let snapshotStore: TerminalSnapshotPersisting
     private let credentialsStore: TerminalCredentialsStoring
@@ -221,9 +222,11 @@ final class TerminalSidebarStore: ObservableObject {
     }
 
     deinit {
-        workspaceIdentityTasks.values.forEach { $0.cancel() }
-        workspaceMetadataCancellables.values.forEach { $0.cancel() }
-        notificationObservers.forEach(NotificationCenter.default.removeObserver)
+        MainActor.assumeIsolated {
+            workspaceIdentityTasks.values.forEach { $0.cancel() }
+            workspaceMetadataCancellables.values.forEach { $0.cancel() }
+            notificationObservers.forEach(NotificationCenter.default.removeObserver)
+        }
     }
 
     func server(for id: TerminalHost.ID) -> TerminalHost? {

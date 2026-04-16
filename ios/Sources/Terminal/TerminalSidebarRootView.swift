@@ -4,7 +4,7 @@ import SwiftUI
 private let log = Logger(subsystem: "ai.manaflow.cmux.ios", category: "terminal.sidebar-view")
 
 struct TerminalSidebarRootView: View {
-    @StateObject private var store: TerminalSidebarStore
+    @State private var store: TerminalSidebarStore
     private let routeStore: NotificationRouteStore
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
@@ -22,7 +22,7 @@ struct TerminalSidebarRootView: View {
         routeStore: NotificationRouteStore? = nil,
         inboxCacheRepository: InboxCacheRepository? = nil
     ) {
-        _store = StateObject(
+        _store = State(
             wrappedValue: store ?? Self.makeLiveStore()
         )
         self.routeStore = routeStore ?? NotificationRouteStore.shared
@@ -934,7 +934,7 @@ private struct TerminalWorkspaceConversationRow: View {
 }
 
 struct TerminalWorkspaceDestinationView: View {
-    @ObservedObject var store: TerminalSidebarStore
+    var store: TerminalSidebarStore
     let workspaceID: TerminalWorkspace.ID
 
     var body: some View {
@@ -974,7 +974,7 @@ struct TerminalWorkspaceScreen: View {
     let workspace: TerminalWorkspace
     let host: TerminalHost
     var controller: TerminalSessionController
-    @ObservedObject var store: TerminalSidebarStore
+    var store: TerminalSidebarStore
     @State private var selectedPaneIndex: Int = 0
 
     private static let monokaiBackground = Color(red: 0x27/255.0, green: 0x28/255.0, blue: 0x22/255.0)

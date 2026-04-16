@@ -954,7 +954,7 @@ struct LiveAnchormuxFixtureView: View {
     )
 
     @State private var configStore: LiveAnchormuxConfigStore
-    @StateObject private var terminalStore: TerminalSidebarStore
+    @State private var terminalStore: TerminalSidebarStore
     @State private var navigationPath = NavigationPath()
     @State private var didAutoOpen = false
 
@@ -963,7 +963,7 @@ struct LiveAnchormuxFixtureView: View {
             wrappedValue: LiveAnchormuxConfigStore(config: config)
         )
         let snapshot = TerminalStoreSnapshot.empty()
-        _terminalStore = StateObject(
+        _terminalStore = State(
             wrappedValue: TerminalSidebarStore(
                 snapshotStore: InMemoryTerminalSnapshotStore(snapshot: snapshot),
                 credentialsStore: InMemoryTerminalCredentialsStore(),

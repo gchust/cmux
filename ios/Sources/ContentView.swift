@@ -6,7 +6,7 @@ private let log = Logger(subsystem: "ai.manaflow.cmux.ios", category: "content")
 
 struct ContentView: View {
     private let authManager = AuthManager.shared
-    @StateObject private var terminalStore = TerminalSidebarRootView.makeLiveStore()
+    @State private var terminalStore = TerminalSidebarRootView.makeLiveStore()
     private let notificationRouteStore = NotificationRouteStore.shared
     private let uiTestTerminalSetupFixture = UITestConfig.terminalSetupFixtureEnabled
     private let uiTestTerminalInputFixture = UITestConfig.terminalInputFixtureEnabled
