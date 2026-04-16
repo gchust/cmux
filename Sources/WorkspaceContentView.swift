@@ -267,6 +267,7 @@ struct WorkspaceContentView: View {
             notificationStore: nil,
             isWorkspaceVisible: isWorkspaceVisible,
             isWorkspaceInputActive: false,
+            isMinimalMode: false,
             appearance: PanelAppearance(
                 dividerColor: .clear,
                 unfocusedOverlayNSColor: .clear,
@@ -288,6 +289,7 @@ struct WorkspaceContentView: View {
             notificationStore: notificationStore,
             isWorkspaceVisible: isWorkspaceVisible,
             isWorkspaceInputActive: isWorkspaceInputActive,
+            isMinimalMode: isMinimalMode,
             appearance: appearance,
             workspacePortalPriority: workspacePortalPriority,
             usesWorkspacePaneOverlay: usesWorkspacePaneOverlay,

@@ -8343,6 +8343,7 @@ final class Workspace: Identifiable, ObservableObject {
             presentation: WorkspaceLayoutPresentationSnapshot(
                 appearance: splitController.configuration.appearance,
                 isInteractive: context.isWorkspaceInputActive,
+                isMinimalMode: context.isMinimalMode,
                 localTabDrag: {
                     guard let tabId = splitController.currentDragTabId,
                           let sourcePaneId = splitController.currentDragSourcePaneId else {

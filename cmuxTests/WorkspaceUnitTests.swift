@@ -2340,6 +2340,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
                 notificationStore: nil,
                 isWorkspaceVisible: true,
                 isWorkspaceInputActive: true,
+                isMinimalMode: false,
                 appearance: PanelAppearance(
                     dividerColor: .clear,
                     unfocusedOverlayNSColor: .clear,
@@ -2407,6 +2408,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             notificationStore: nil,
             isWorkspaceVisible: true,
             isWorkspaceInputActive: true,
+            isMinimalMode: false,
             appearance: PanelAppearance(
                 dividerColor: .clear,
                 unfocusedOverlayNSColor: .clear,
@@ -2454,6 +2456,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             notificationStore: nil,
             isWorkspaceVisible: true,
             isWorkspaceInputActive: true,
+            isMinimalMode: false,
             appearance: PanelAppearance(
                 dividerColor: .clear,
                 unfocusedOverlayNSColor: .clear,
@@ -2511,6 +2514,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
                 notificationStore: nil,
                 isWorkspaceVisible: true,
                 isWorkspaceInputActive: false,
+                isMinimalMode: true,
                 appearance: PanelAppearance(
                     dividerColor: .clear,
                     unfocusedOverlayNSColor: .clear,
@@ -2523,6 +2527,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         )
 
         XCTAssertFalse(snapshot.presentation.isInteractive)
+        XCTAssertTrue(snapshot.presentation.isMinimalMode)
         XCTAssertEqual(snapshot.presentation.appearance.tabBarLeadingInset, 19, accuracy: 0.001)
         XCTAssertEqual(snapshot.presentation.localTabDrag?.tabId, TabID(id: panelId))
         XCTAssertEqual(snapshot.presentation.localTabDrag?.sourcePaneId, paneId)
@@ -2533,6 +2538,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
                 notificationStore: nil,
                 isWorkspaceVisible: true,
                 isWorkspaceInputActive: true,
+                isMinimalMode: false,
                 appearance: PanelAppearance(
                     dividerColor: .clear,
                     unfocusedOverlayNSColor: .clear,
@@ -2563,6 +2569,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
                 notificationStore: nil,
                 isWorkspaceVisible: true,
                 isWorkspaceInputActive: true,
+                isMinimalMode: false,
                 appearance: PanelAppearance(
                     dividerColor: .clear,
                     unfocusedOverlayNSColor: .clear,
@@ -2938,6 +2945,7 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             notificationStore: nil,
             isWorkspaceVisible: true,
             isWorkspaceInputActive: true,
+            isMinimalMode: false,
             appearance: PanelAppearance(
                 dividerColor: .clear,
                 unfocusedOverlayNSColor: .clear,

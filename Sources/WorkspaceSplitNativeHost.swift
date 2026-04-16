@@ -1264,10 +1264,8 @@ private final class WorkspaceLayoutNativeTabBarView: NSView {
 
     private func updateSplitButtonsVisibility() {
         guard let presentation, let snapshot else { return }
-        let presentationMode = UserDefaults.standard.string(forKey: "workspacePresentationMode") ?? "standard"
-        let isMinimalMode = presentationMode == "minimal"
         let shouldShow = snapshot.showSplitButtons
-            && (!isMinimalMode || isHovering || !presentation.appearance.splitButtonsOnHover)
+            && (!presentation.isMinimalMode || isHovering || !presentation.appearance.splitButtonsOnHover)
         splitButtonsView.isHidden = !shouldShow
         needsLayout = true
     }

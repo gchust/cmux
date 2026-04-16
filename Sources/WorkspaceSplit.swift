@@ -418,6 +418,7 @@ struct WorkspaceLayoutRenderContext {
     let notificationStore: TerminalNotificationStore?
     let isWorkspaceVisible: Bool
     let isWorkspaceInputActive: Bool
+    let isMinimalMode: Bool
     let appearance: PanelAppearance
     let workspacePortalPriority: Int
     let usesWorkspacePaneOverlay: Bool
@@ -3017,6 +3018,7 @@ struct WorkspaceLayoutLocalDragSnapshot {
 struct WorkspaceLayoutPresentationSnapshot {
     let appearance: WorkspaceLayoutConfiguration.Appearance
     let isInteractive: Bool
+    let isMinimalMode: Bool
     let localTabDrag: WorkspaceLayoutLocalDragSnapshot?
 
     var isHandlingLocalTabDrag: Bool {
