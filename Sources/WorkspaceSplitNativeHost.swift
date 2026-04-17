@@ -310,9 +310,11 @@ final class WorkspaceLayoutRootHostView: NSView {
     private var renderSnapshot: WorkspaceLayoutRenderSnapshot
     private let surfaceRegistry: WorkspaceSurfaceRegistry
 
+    private let viewportCanvas: WorkspaceLayoutViewportCanvasView
     private var currentRootView: NSView?
     private var paneHosts: [UUID: WorkspaceLayoutPaneHostView] = [:]
     private var splitHosts: [UUID: WorkspaceLayoutNativeSplitView] = [:]
+    private var paneDropZones: [UUID: DropZone?] = [:]
     private var renderedPaneIds: Set<UUID> = []
     private var renderedSplitIds: Set<UUID> = []
     private var lastContainerFrame: CGRect = .zero
@@ -325,11 +327,14 @@ final class WorkspaceLayoutRootHostView: NSView {
         self.hostBridge = hostBridge
         self.renderSnapshot = renderSnapshot
         self.surfaceRegistry = surfaceRegistry
+        viewportCanvas = WorkspaceLayoutViewportCanvasView(surfaceRegistry: surfaceRegistry)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.masksToBounds = true
+        addSubview(viewportCanvas)
         updateBackground()
         rebuildTree()
+        applyViewportScene()
     }
 
     @available(*, unavailable)
@@ -347,11 +352,13 @@ final class WorkspaceLayoutRootHostView: NSView {
         isHidden = !renderSnapshot.presentation.isInteractive
         updateBackground()
         rebuildTree()
+        applyViewportScene()
         syncContainerFrameIfNeeded(isDragging: false)
     }
 
     override func layout() {
         super.layout()
+        viewportCanvas.frame = bounds
         currentRootView?.frame = bounds
         syncContainerFrameIfNeeded(isDragging: false)
     }
@@ -366,6 +373,7 @@ final class WorkspaceLayoutRootHostView: NSView {
 #endif
         if window != nil {
             rebuildTree()
+            applyViewportScene()
         }
         syncContainerFrameIfNeeded(isDragging: false)
     }
@@ -379,6 +387,15 @@ final class WorkspaceLayoutRootHostView: NSView {
     fileprivate func notifyGeometryChanged(isDragging: Bool) {
         syncContainerFrameIfNeeded(isDragging: isDragging)
         hostBridge.notifyGeometryChange(isDragging: isDragging)
+    }
+
+    fileprivate func setActiveDropZone(_ zone: DropZone?, for paneId: PaneID) {
+        paneDropZones[paneId.id] = zone
+        viewportCanvas.update(
+            viewports: renderSnapshot.viewports,
+            presentation: renderSnapshot.presentation,
+            paneDropZones: paneDropZones
+        )
     }
 
     private func syncContainerFrameIfNeeded(isDragging: Bool) {
@@ -413,12 +430,21 @@ final class WorkspaceLayoutRootHostView: NSView {
         cleanupUnusedHosts()
     }
 
+    private func applyViewportScene() {
+        viewportCanvas.update(
+            viewports: renderSnapshot.viewports,
+            presentation: renderSnapshot.presentation,
+            paneDropZones: paneDropZones
+        )
+    }
+
     private func cleanupUnusedHosts() {
         let livePaneIds = renderSnapshot.root.paneIds
         let liveSplitIds = renderSnapshot.root.splitIds
 
         for (id, host) in paneHosts where !livePaneIds.contains(id) {
             host.prepareForRemoval()
+            paneDropZones.removeValue(forKey: id)
             if host.superview != nil {
                 host.removeFromSuperview()
             }
@@ -457,8 +483,7 @@ final class WorkspaceLayoutRootHostView: NSView {
             rootHost: self,
             snapshot: snapshot,
             hostBridge: hostBridge,
-            presentation: renderSnapshot.presentation,
-            surfaceRegistry: surfaceRegistry
+            presentation: renderSnapshot.presentation
         )
         paneHosts[snapshot.paneId.id] = host
         return host
@@ -744,37 +769,26 @@ private final class WorkspaceLayoutPaneHostView: NSView {
     private var snapshot: WorkspaceLayoutPaneRenderSnapshot
     private let hostBridge: WorkspaceLayoutInteractionHandlers
     private var presentation: WorkspaceLayoutPresentationSnapshot
-    private let surfaceRegistry: WorkspaceSurfaceRegistry
 
     private let tabBarView = WorkspaceLayoutNativeTabBarView(frame: .zero)
-    private let contentContainer = NSView(frame: .zero)
-    private let contentSlotView = WorkspaceLayoutPaneContentSlotView(frame: .zero)
     private let dropOverlayView = WorkspaceLayoutPaneDropOverlayView(frame: .zero)
-    private var activeMountedContent: WorkspaceLayoutMountedTabEntry?
     private var activeDropZone: DropZone? = nil
 
     init(
         rootHost: WorkspaceLayoutRootHostView,
         snapshot: WorkspaceLayoutPaneRenderSnapshot,
         hostBridge: WorkspaceLayoutInteractionHandlers,
-        presentation: WorkspaceLayoutPresentationSnapshot,
-        surfaceRegistry: WorkspaceSurfaceRegistry
+        presentation: WorkspaceLayoutPresentationSnapshot
     ) {
         self.rootHost = rootHost
         self.snapshot = snapshot
         self.hostBridge = hostBridge
         self.presentation = presentation
-        self.surfaceRegistry = surfaceRegistry
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.masksToBounds = true
-        addSubview(contentContainer)
+        layer?.backgroundColor = NSColor.clear.cgColor
         addSubview(tabBarView)
         addSubview(dropOverlayView)
-        contentContainer.wantsLayer = true
-        contentContainer.layer?.backgroundColor = NSColor.clear.cgColor
-        contentSlotView.autoresizingMask = [.width, .height]
-        contentContainer.addSubview(contentSlotView)
         dropOverlayView.hitTestPassthroughEnabled = true
         update(
             snapshot: snapshot,
@@ -795,9 +809,6 @@ private final class WorkspaceLayoutPaneHostView: NSView {
     ) {
         self.snapshot = snapshot
         self.presentation = presentation
-        layer?.backgroundColor = TabBarColors.nsColorPaneBackground(
-            for: presentation.appearance
-        ).cgColor
 
         tabBarView.update(
             snapshot: snapshot.chrome,
@@ -805,7 +816,6 @@ private final class WorkspaceLayoutPaneHostView: NSView {
             presentation: presentation
         )
         tabBarView.onTabMutation = { [weak self] in
-            self?.refreshContent()
             self?.rootHost?.notifyGeometryChanged(isDragging: false)
         }
 
@@ -819,23 +829,15 @@ private final class WorkspaceLayoutPaneHostView: NSView {
             },
             onDropPerformed: { [weak self] in
                 self?.setActiveDropZone(nil)
-                self?.refreshContent()
                 self?.rootHost?.notifyGeometryChanged(isDragging: false)
             }
         )
-
-        refreshContent()
+        dropOverlayView.prefersNativeDropOverlay = snapshot.prefersNativeDropOverlay
         needsLayout = true
     }
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil else { return }
-        refreshContent()
-    }
-
     func prepareForRemoval() {
-        clearMountedContent()
+        rootHost?.setActiveDropZone(nil, for: snapshot.paneId)
     }
 
     override func layout() {
@@ -843,66 +845,14 @@ private final class WorkspaceLayoutPaneHostView: NSView {
         let barHeight = presentation.appearance.tabBarHeight
         let topY = max(0, bounds.height - barHeight)
         tabBarView.frame = CGRect(x: 0, y: topY, width: bounds.width, height: barHeight)
-        contentContainer.frame = CGRect(x: 0, y: 0, width: bounds.width, height: topY)
-        contentSlotView.frame = contentContainer.bounds
-        dropOverlayView.frame = contentContainer.frame
+        dropOverlayView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: topY)
     }
 
     private func setActiveDropZone(_ zone: DropZone?) {
         guard activeDropZone != zone else { return }
         activeDropZone = zone
         dropOverlayView.activeDropZone = zone
-        refreshContent()
-    }
-
-    private func refreshContent() {
-        let paneContent = snapshot.displayedContent
-        dropOverlayView.prefersNativeDropOverlay = paneContent.prefersNativeDropOverlay
-        refreshPaneContent(
-            paneContent,
-            for: snapshot.displayedContentId,
-            isSelected: true
-        )
-    }
-
-    private func clearMountedContent() {
-        guard let activeMountedContent else { return }
-        tearDownMountedContent(activeMountedContent)
-        self.activeMountedContent = nil
-    }
-
-    private func refreshPaneContent(
-        _ paneContent: WorkspacePaneContent,
-        for contentId: UUID,
-        isSelected: Bool
-    ) {
-        let mountIdentity = paneContent.mountIdentity(contentId: contentId)
-        if let existing = activeMountedContent,
-           (existing.contentId != contentId || existing.mountIdentity != mountIdentity) {
-            tearDownMountedContent(existing)
-            activeMountedContent = nil
-        }
-
-        surfaceRegistry.mountContent(
-            paneContent,
-            contentId: contentId,
-            in: contentSlotView,
-            isSelected: isSelected,
-            activeDropZone: activeDropZone
-        )
-        activeMountedContent = WorkspaceLayoutMountedTabEntry(
-            contentId: contentId,
-            content: paneContent,
-            mountIdentity: mountIdentity
-        )
-    }
-
-    private func tearDownMountedContent(_ content: WorkspaceLayoutMountedTabEntry) {
-        surfaceRegistry.unmountContent(
-            content.content,
-            contentId: content.contentId,
-            from: contentSlotView
-        )
+        rootHost?.setActiveDropZone(zone, for: snapshot.paneId)
     }
 }
 
@@ -955,6 +905,130 @@ final class WorkspaceLayoutPaneContentSlotView: NSView {
             return
         }
         installedContentView.frame = bounds
+    }
+}
+
+@MainActor
+private final class WorkspaceLayoutViewportCanvasView: NSView {
+    private let surfaceRegistry: WorkspaceSurfaceRegistry
+    private var viewportHosts: [WorkspacePaneMountIdentity: WorkspaceLayoutSurfaceViewportHostView] = [:]
+
+    init(surfaceRegistry: WorkspaceSurfaceRegistry) {
+        self.surfaceRegistry = surfaceRegistry
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(
+        viewports: [WorkspaceLayoutViewportSnapshot],
+        presentation _: WorkspaceLayoutPresentationSnapshot,
+        paneDropZones: [UUID: DropZone?]
+    ) {
+        let liveIdentities = Set(viewports.map(\.mountIdentity))
+
+        for viewport in viewports {
+            let host = viewportHost(for: viewport.mountIdentity)
+            host.apply(
+                snapshot: viewport,
+                surfaceRegistry: surfaceRegistry,
+                activeDropZone: paneDropZones[viewport.paneId.id] ?? nil
+            )
+            if host.superview !== self {
+                addSubview(host)
+            }
+        }
+
+        for (identity, host) in viewportHosts where !liveIdentities.contains(identity) {
+            host.prepareForRemoval(surfaceRegistry: surfaceRegistry)
+            viewportHosts.removeValue(forKey: identity)
+        }
+    }
+
+    private func viewportHost(
+        for identity: WorkspacePaneMountIdentity
+    ) -> WorkspaceLayoutSurfaceViewportHostView {
+        if let existing = viewportHosts[identity] {
+            return existing
+        }
+        let host = WorkspaceLayoutSurfaceViewportHostView(mountIdentity: identity)
+        viewportHosts[identity] = host
+        return host
+    }
+}
+
+@MainActor
+private final class WorkspaceLayoutSurfaceViewportHostView: NSView {
+    private let mountIdentity: WorkspacePaneMountIdentity
+    private let slotView = WorkspaceLayoutPaneContentSlotView(frame: .zero)
+    private var mountedContent: WorkspaceLayoutMountedTabEntry?
+
+    init(mountIdentity: WorkspacePaneMountIdentity) {
+        self.mountIdentity = mountIdentity
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.masksToBounds = true
+        addSubview(slotView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        slotView.frame = bounds
+    }
+
+    func apply(
+        snapshot: WorkspaceLayoutViewportSnapshot,
+        surfaceRegistry: WorkspaceSurfaceRegistry,
+        activeDropZone: DropZone?
+    ) {
+        frame = snapshot.frame
+        let nextMountedContent = WorkspaceLayoutMountedTabEntry(
+            contentId: snapshot.contentId,
+            content: snapshot.content,
+            mountIdentity: mountIdentity
+        )
+
+        if let mountedContent,
+           (mountedContent.contentId != nextMountedContent.contentId
+               || mountedContent.mountIdentity != nextMountedContent.mountIdentity) {
+            surfaceRegistry.unmountContent(
+                mountedContent.content,
+                contentId: mountedContent.contentId,
+                from: slotView
+            )
+            self.mountedContent = nil
+        }
+
+        surfaceRegistry.mountContent(
+            snapshot.content,
+            contentId: snapshot.contentId,
+            in: slotView,
+            activeDropZone: activeDropZone
+        )
+        mountedContent = nextMountedContent
+    }
+
+    func prepareForRemoval(surfaceRegistry: WorkspaceSurfaceRegistry) {
+        if let mountedContent {
+            surfaceRegistry.unmountContent(
+                mountedContent.content,
+                contentId: mountedContent.contentId,
+                from: slotView
+            )
+        }
+        mountedContent = nil
+        removeFromSuperview()
     }
 }
 

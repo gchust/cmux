@@ -446,10 +446,9 @@ struct WorkspaceLayoutRenderContext {
     let showSplitButtons: Bool
 
     func panelVisibleInUI(isSelectedInPane: Bool, isFocused: Bool) -> Bool {
+        _ = isFocused
         guard isWorkspaceVisible else { return false }
-        // During pane/tab reparenting, WorkspaceSplit can transiently report selected=false
-        // for the currently focused panel. Keep focused content visible to avoid blank frames.
-        return isSelectedInPane || isFocused
+        return isSelectedInPane
     }
 
     func panelPresentationFacts(
@@ -479,8 +478,7 @@ struct WorkspacePanelPresentationFacts: Equatable, Sendable {
 
     var isVisibleInUI: Bool {
         guard isWorkspaceVisible else { return false }
-        // During pane/tab reparenting, selection can briefly lag focus state.
-        return isSelectedInPane || isFocused
+        return isSelectedInPane
     }
 
     var wantsFirstResponder: Bool {
@@ -3126,8 +3124,15 @@ struct WorkspaceLayoutPaneChromeSnapshot {
 struct WorkspaceLayoutPaneRenderSnapshot {
     let paneId: PaneID
     let chrome: WorkspaceLayoutPaneChromeSnapshot
-    let displayedContentId: UUID
-    let displayedContent: WorkspacePaneContent
+    let prefersNativeDropOverlay: Bool
+}
+
+struct WorkspaceLayoutViewportSnapshot {
+    let paneId: PaneID
+    let contentId: UUID
+    let mountIdentity: WorkspacePaneMountIdentity
+    let content: WorkspacePaneContent
+    let frame: CGRect
 }
 
 struct WorkspaceLayoutSplitRenderSnapshot {
@@ -3183,4 +3188,5 @@ struct WorkspaceLayoutPresentationSnapshot {
 struct WorkspaceLayoutRenderSnapshot {
     let presentation: WorkspaceLayoutPresentationSnapshot
     let root: WorkspaceLayoutRenderNodeSnapshot
+    let viewports: [WorkspaceLayoutViewportSnapshot]
 }

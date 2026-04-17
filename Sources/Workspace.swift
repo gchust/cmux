@@ -253,13 +253,11 @@ final class WorkspaceSurfaceRegistry {
         _ content: WorkspacePaneContent,
         contentId: UUID,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        isSelected: Bool,
         activeDropZone: DropZone?
     ) {
         retainedHost(for: content, contentId: contentId).mount(
             content: content,
             in: slotView,
-            isSelected: isSelected,
             activeDropZone: activeDropZone
         )
     }
@@ -341,7 +339,6 @@ private protocol WorkspaceRetainedSurfaceHost: AnyObject {
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        isSelected: Bool,
         activeDropZone: DropZone?
     )
 
@@ -372,7 +369,6 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        isSelected: Bool,
         activeDropZone: DropZone?
     ) {
         guard case .terminal(let descriptor) = content,
@@ -383,15 +379,14 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
 
         let hostedView = panel.hostedView
         let desiredState = MountedTerminalState(
-            dropZone: isSelected ? activeDropZone : nil,
+            dropZone: activeDropZone,
             presentation: WorkspaceTerminalPresentationState(
-                isVisibleInUI: isSelected ? descriptor.isVisibleInUI : false,
-                isActive: isSelected ? descriptor.isFocused : false
+                isVisibleInUI: descriptor.isVisibleInUI,
+                isActive: descriptor.isFocused
             )
         )
 
         slotView.installContentView(hostedView)
-        slotView.isHidden = !isSelected
 
         hostedView.setFocusHandler { descriptor.onFocus() }
         hostedView.setTriggerFlashHandler(descriptor.onTriggerFlash)
@@ -422,7 +417,7 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
 
         let canWarmStartRuntime =
             panel.surface.surface == nil &&
-            (isSelected || descriptor.isVisibleInUI) &&
+            descriptor.isVisibleInUI &&
             slotView.bounds.width > 1 &&
             slotView.bounds.height > 1
         if canWarmStartRuntime {
@@ -510,7 +505,6 @@ private final class WorkspaceBrowserRetainedSurfaceHost: WorkspaceRetainedSurfac
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        isSelected: Bool,
         activeDropZone: DropZone?
     ) {
         guard case .browser(let descriptor) = content,
@@ -522,10 +516,9 @@ private final class WorkspaceBrowserRetainedSurfaceHost: WorkspaceRetainedSurfac
         hostView.update(
             panel: panel,
             descriptor: descriptor,
-            activeDropZone: isSelected ? activeDropZone : nil
+            activeDropZone: activeDropZone
         )
         slotView.installContentView(hostView)
-        slotView.isHidden = !isSelected
     }
 
     func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) {
@@ -562,7 +555,6 @@ private final class WorkspaceMarkdownRetainedSurfaceHost: WorkspaceRetainedSurfa
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        isSelected: Bool,
         activeDropZone: DropZone?
     ) {
         guard case .markdown(let descriptor) = content,
@@ -578,14 +570,13 @@ private final class WorkspaceMarkdownRetainedSurfaceHost: WorkspaceRetainedSurfa
                 onRequestPanelFocus: descriptor.onRequestPanelFocus
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .environment(\.paneDropZone, isSelected ? activeDropZone : nil)
+            .environment(\.paneDropZone, activeDropZone)
             .transaction { tx in
                 tx.disablesAnimations = true
             }
         )
 
         slotView.installContentView(hostingController.view)
-        slotView.isHidden = !isSelected
     }
 
     func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) {
@@ -618,7 +609,6 @@ private final class WorkspacePlaceholderRetainedSurfaceHost: WorkspaceRetainedSu
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        isSelected: Bool,
         activeDropZone _: DropZone?
     ) {
         guard case .placeholder(let descriptor) = content else {
@@ -637,7 +627,6 @@ private final class WorkspacePlaceholderRetainedSurfaceHost: WorkspaceRetainedSu
         hostingController.rootView = rootView
 
         slotView.installContentView(hostingController.view)
-        slotView.isHidden = !isSelected
     }
 
     func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) {
@@ -8393,6 +8382,26 @@ final class Workspace: Identifiable, ObservableObject {
         )
     }
 
+    private func makeDisplayedPaneContentSnapshot(
+        pane: PaneState,
+        chrome: WorkspaceLayoutPaneChromeSnapshot,
+        context: WorkspaceLayoutRenderContext
+    ) -> (contentId: UUID, content: WorkspacePaneContent) {
+        if let selectedTab = chrome.tabs.first(where: { $0.tab.id.id == chrome.selectedTabId })?.tab
+            ?? chrome.tabs.first?.tab {
+            return (
+                selectedTab.id.id,
+                makePaneContentDescriptor(
+                    for: selectedTab,
+                    in: pane.id,
+                    context: context
+                )
+            )
+        }
+
+        return (pane.id.id, makeEmptyPaneContentDescriptor(in: pane.id))
+    }
+
     private func makeRenderNodeSnapshot(
         node: SplitNode,
         projectionState: WorkspaceTabChromeProjectionState,
@@ -8405,27 +8414,16 @@ final class Workspace: Identifiable, ObservableObject {
                 projectionState: projectionState,
                 showSplitButtons: context.showSplitButtons
             )
-            let displayedContent: (contentId: UUID, content: WorkspacePaneContent) = {
-                if let selectedTab = chrome.tabs.first(where: { $0.tab.id.id == chrome.selectedTabId })?.tab
-                    ?? chrome.tabs.first?.tab {
-                    return (
-                        selectedTab.id.id,
-                        makePaneContentDescriptor(
-                            for: selectedTab,
-                            in: pane.id,
-                            context: context
-                        )
-                    )
-                }
-
-                return (pane.id.id, makeEmptyPaneContentDescriptor(in: pane.id))
-            }()
+            let displayedContent = makeDisplayedPaneContentSnapshot(
+                pane: pane,
+                chrome: chrome,
+                context: context
+            )
             return .pane(
                 WorkspaceLayoutPaneRenderSnapshot(
                     paneId: pane.id,
                     chrome: chrome,
-                    displayedContentId: displayedContent.contentId,
-                    displayedContent: displayedContent.content
+                    prefersNativeDropOverlay: displayedContent.content.prefersNativeDropOverlay
                 )
             )
         case .split(let split):
@@ -8450,9 +8448,87 @@ final class Workspace: Identifiable, ObservableObject {
         }
     }
 
+    private func makeViewportSnapshots(
+        node: SplitNode,
+        projectionState: WorkspaceTabChromeProjectionState,
+        context: WorkspaceLayoutRenderContext,
+        paneFramesById: [UUID: CGRect]
+    ) -> [WorkspaceLayoutViewportSnapshot] {
+        switch node {
+        case .pane(let pane):
+            guard let frame = paneFramesById[pane.id.id] else {
+                return []
+            }
+            let chrome = makePaneChromeSnapshot(
+                pane: pane,
+                projectionState: projectionState,
+                showSplitButtons: context.showSplitButtons
+            )
+            let displayedContent = makeDisplayedPaneContentSnapshot(
+                pane: pane,
+                chrome: chrome,
+                context: context
+            )
+            return [
+                WorkspaceLayoutViewportSnapshot(
+                    paneId: pane.id,
+                    contentId: displayedContent.contentId,
+                    mountIdentity: displayedContent.content.mountIdentity(contentId: displayedContent.contentId),
+                    content: displayedContent.content,
+                    frame: frame
+                )
+            ]
+        case .split(let split):
+            return makeViewportSnapshots(
+                node: split.first,
+                projectionState: projectionState,
+                context: context,
+                paneFramesById: paneFramesById
+            ) + makeViewportSnapshots(
+                node: split.second,
+                projectionState: projectionState,
+                context: context,
+                paneFramesById: paneFramesById
+            )
+        }
+    }
+
+    private func viewportFramesByPaneId(
+        from layoutSnapshot: LayoutSnapshot,
+        tabBarHeight: CGFloat
+    ) -> [UUID: CGRect] {
+        let containerOrigin = CGPoint(
+            x: CGFloat(layoutSnapshot.containerFrame.x),
+            y: CGFloat(layoutSnapshot.containerFrame.y)
+        )
+
+        return Dictionary(uniqueKeysWithValues: layoutSnapshot.panes.compactMap { pane in
+            guard let paneUUID = UUID(uuidString: pane.paneId) else { return nil }
+            let paneFrame = CGRect(
+                x: CGFloat(pane.frame.x) - containerOrigin.x,
+                y: CGFloat(pane.frame.y) - containerOrigin.y,
+                width: CGFloat(pane.frame.width),
+                height: CGFloat(pane.frame.height)
+            )
+            let topInset = min(tabBarHeight, max(0, paneFrame.height - 1))
+            let contentFrame = CGRect(
+                x: paneFrame.origin.x,
+                y: paneFrame.origin.y + topInset,
+                width: paneFrame.width,
+                height: max(0, paneFrame.height - topInset)
+            )
+            return (paneUUID, contentFrame)
+        })
+    }
+
     @MainActor
     func makeLayoutRenderSnapshot(context: WorkspaceLayoutRenderContext) -> WorkspaceLayoutRenderSnapshot {
         let projectionState = makeTabChromeProjectionState(notificationStore: context.notificationStore)
+        let geometrySnapshot = splitController.layoutSnapshot()
+        let viewportFrames = viewportFramesByPaneId(
+            from: geometrySnapshot,
+            tabBarHeight: splitController.configuration.appearance.tabBarHeight
+        )
         return WorkspaceLayoutRenderSnapshot(
             presentation: WorkspaceLayoutPresentationSnapshot(
                 appearance: splitController.configuration.appearance,
@@ -8473,6 +8549,12 @@ final class Workspace: Identifiable, ObservableObject {
                 node: splitController.renderRootNode,
                 projectionState: projectionState,
                 context: context
+            ),
+            viewports: makeViewportSnapshots(
+                node: splitController.renderRootNode,
+                projectionState: projectionState,
+                context: context,
+                paneFramesById: viewportFrames
             )
         )
     }

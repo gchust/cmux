@@ -28,8 +28,8 @@ final class WorkspaceContentViewVisibilityTests: XCTestCase {
         )
     }
 
-    func testPanelVisibleInUIReturnsTrueForFocusedPanelDuringTransientSelectionGap() {
-        XCTAssertTrue(
+    func testPanelVisibleInUIReturnsFalseForFocusedPanelDuringTransientSelectionGap() {
+        XCTAssertFalse(
             WorkspaceContentView.panelVisibleInUI(
                 isWorkspaceVisible: true,
                 isSelectedInPane: false,
@@ -57,7 +57,7 @@ final class WorkspaceContentViewVisibilityTests: XCTestCase {
             panelId: panelId,
             isWorkspaceVisible: true,
             isWorkspaceInputActive: true,
-            isSelectedInPane: false,
+            isSelectedInPane: true,
             isFocused: true
         )
         XCTAssertTrue(visibleFocused.isVisibleInUI)

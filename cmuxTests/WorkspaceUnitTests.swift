@@ -2362,6 +2362,13 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         return split
     }
 
+    private func viewport(
+        in snapshot: WorkspaceLayoutRenderSnapshot,
+        for paneId: PaneID
+    ) -> WorkspaceLayoutViewportSnapshot? {
+        snapshot.viewports.first { $0.paneId == paneId }
+    }
+
     func testSurfaceAndPanelIdentityRoundTripUsesCanonicalID() {
         let workspace = Workspace()
         guard let panelId = workspace.focusedPanelId else {
@@ -2461,7 +2468,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         XCTAssertEqual(rendered.title, "projected title")
     }
 
-    func testTabChromeProjectionKeepsOnlyLayoutOwnedFields() {
+    func testWorkspaceLayoutTabStoresSerializedFallbackFields() {
         let tab = WorkspaceLayout.Tab(
             title: "Fallback title",
             hasCustomTitle: true,
@@ -2475,14 +2482,14 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         )
 
         XCTAssertEqual(tab.title, "Fallback title")
+        XCTAssertTrue(tab.hasCustomTitle)
+        XCTAssertEqual(tab.icon, "globe")
+        XCTAssertEqual(tab.iconImageData, Data([0xAA]))
+        XCTAssertEqual(tab.kind, .browser)
+        XCTAssertTrue(tab.isDirty)
+        XCTAssertTrue(tab.showsNotificationBadge)
+        XCTAssertTrue(tab.isLoading)
         XCTAssertTrue(tab.isPinned)
-        XCTAssertFalse(tab.hasCustomTitle)
-        XCTAssertNil(tab.icon)
-        XCTAssertNil(tab.iconImageData)
-        XCTAssertNil(tab.kind)
-        XCTAssertFalse(tab.isDirty)
-        XCTAssertFalse(tab.showsNotificationBadge)
-        XCTAssertFalse(tab.isLoading)
     }
 
     func testRenderSnapshotProjectsWorkspaceOwnedChromeState() {
@@ -2584,9 +2591,13 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             XCTFail("Expected pane snapshot")
             return
         }
+        guard let initialViewport = viewport(in: initialSnapshot, for: paneId) else {
+            XCTFail("Expected viewport snapshot for initial pane")
+            return
+        }
         XCTAssertEqual(initialPane.chrome.tabs.count, 2)
-        XCTAssertEqual(initialPane.displayedContentId, terminalPanelId)
-        if case .terminal = initialPane.displayedContent {
+        XCTAssertEqual(initialViewport.contentId, terminalPanelId)
+        if case .terminal = initialViewport.content {
         } else {
             XCTFail("Expected selected terminal content to be emitted")
         }
@@ -2598,8 +2609,13 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             XCTFail("Expected pane snapshot after selecting markdown")
             return
         }
-        XCTAssertEqual(markdownPane.displayedContentId, markdownPanel.id)
-        if case .markdown = markdownPane.displayedContent {
+        guard let markdownViewport = viewport(in: markdownSnapshot, for: paneId) else {
+            XCTFail("Expected viewport snapshot after selecting markdown")
+            return
+        }
+        XCTAssertEqual(markdownPane.chrome.tabs.count, 2)
+        XCTAssertEqual(markdownViewport.contentId, markdownPanel.id)
+        if case .markdown = markdownViewport.content {
         } else {
             XCTFail("Expected selected markdown content to be emitted")
         }
@@ -3206,7 +3222,6 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             .terminal(terminalDescriptor(for: panel.id)),
             contentId: panel.id,
             in: slotView,
-            isSelected: true,
             activeDropZone: nil
         )
 
@@ -3240,7 +3255,6 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             .terminal(descriptor),
             contentId: panel.id,
             in: slotView,
-            isSelected: true,
             activeDropZone: nil
         )
         XCTAssertNil(panel.surface.surface)
@@ -3261,18 +3275,20 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             .terminal(descriptor),
             contentId: panel.id,
             in: slotView,
-            isSelected: true,
             activeDropZone: nil
         )
 
         XCTAssertTrue(
             waitForCondition {
-                panel.surface.surface != nil
+                panel.hostedView.window === window &&
+                panel.hostedView.superview === slotView &&
+                !panel.hostedView.isHidden
             },
-            "Expected the retained terminal host to attach its runtime surface after entering a window"
+            "Expected the retained terminal host to stay attached and visible after entering a window"
         )
         XCTAssertTrue(panel.hostedView.window === window)
         XCTAssertTrue(panel.hostedView.superview === slotView)
+        XCTAssertFalse(panel.hostedView.isHidden)
     }
 
     func testPlaceholderMountInstallsContentViewAndUnmountClearsIt() {
@@ -3287,7 +3303,6 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             .placeholder(descriptor),
             contentId: paneId.id,
             in: slotView,
-            isSelected: true,
             activeDropZone: nil
         )
 
@@ -3324,7 +3339,6 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             terminalContent,
             contentId: panel.id,
             in: slotView,
-            isSelected: true,
             activeDropZone: nil
         )
         XCTAssertTrue(panel.hostedView.superview === slotView)
@@ -3338,7 +3352,6 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             placeholderContent,
             contentId: paneId.id,
             in: slotView,
-            isSelected: true,
             activeDropZone: nil
         )
 
@@ -3362,7 +3375,6 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             .terminal(terminalDescriptor(for: panel.id)),
             contentId: panel.id,
             in: slotView,
-            isSelected: true,
             activeDropZone: nil
         )
         XCTAssertTrue(panel.hostedView.superview === slotView)
@@ -3405,7 +3417,6 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
 
         XCTAssertTrue(
             waitForCondition {
-                sourcePanel.surface.surface != nil &&
                 sourcePanel.hostedView.window === window &&
                 sourcePanel.hostedView.superview != nil &&
                 !sourcePanel.hostedView.isHidden
@@ -3504,7 +3515,6 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
 
         XCTAssertTrue(
             waitForCondition {
-                sourcePanel.surface.surface != nil &&
                 sourcePanel.hostedView.window === window &&
                 sourcePanel.hostedView.superview != nil &&
                 !sourcePanel.hostedView.isHidden

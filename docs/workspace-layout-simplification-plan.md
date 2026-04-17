@@ -1,5 +1,15 @@
 # Workspace Layout Simplification Plan
 
+## Current Cycle (5-step retained viewport renderer cut)
+
+Status on `2026-04-16`:
+
+1. done, `Workspace` now derives one immutable `WorkspaceLayoutRenderSnapshot` with pane chrome plus explicit `WorkspaceLayoutViewportSnapshot` content mounts.
+2. done, the root AppKit host now owns a dedicated `WorkspaceLayoutViewportCanvasView` that retains one surface host per `WorkspacePaneMountIdentity`.
+3. done, pane hosts are now shell-only, tab chrome plus drop overlay, and no longer install pane content directly.
+4. done, terminal, browser, markdown, and placeholder content now mount only through the retained viewport path, and selected-only visibility replaced the old focused-but-unselected fallback.
+5. done, targeted verification passed locally with `37` tests and `0` failures (`WorkspaceContentViewVisibilityTests`, `WorkspaceLayoutSimplificationTests`, `WorkspaceSurfaceRegistryTests`), passed again on `ssh cmux-macmini` with `32` tests and `0` failures using `CMUX_SKIP_ZIG_BUILD=1`, and the tagged reload completed for `issue-2289-appkit-split-host`.
+
 ## Current Cycle (7-step focus/visibility refactor)
 
 Status on `2026-04-16`:
