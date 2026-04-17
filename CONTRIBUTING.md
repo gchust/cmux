@@ -8,6 +8,16 @@
 
 ## Getting Started
 
+### Fork branch model
+
+If you are working in the long-lived fork maintained under `gchust/cmux`, use this branch model instead of committing directly to the upstream mirror:
+
+- `main`: upstream mirror branch
+- `custom/main`: fork default branch for local work and releases
+- `feature/*`: short-lived branches off `custom/main`
+
+Open PRs into `custom/main`. Do not put fork-only work directly onto `main`.
+
 1. Clone the repository with submodules:
    ```bash
    git clone --recursive https://github.com/manaflow-ai/cmux.git

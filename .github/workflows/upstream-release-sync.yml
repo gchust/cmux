@@ -1,0 +1,183 @@
+name: Upstream release sync
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: manaflow-ai/cmux
+  MIRROR_BRANCH: main
+  CUSTOM_BRANCH: custom/main
+
+jobs:
+  sync-upstream-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout custom branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: custom/main
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          else
+            git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          fi
+
+      - name: Fetch upstream release branch and tags
+        run: |
+          git fetch upstream "${MIRROR_BRANCH}" --tags --force
+
+      - name: Resolve latest upstream release tag
+        id: release
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const [owner, repo] = process.env.UPSTREAM_REPO.split('/');
+            const release = await github.rest.repos.getLatestRelease({ owner, repo });
+            core.setOutput('tag', release.data.tag_name);
+
+      - name: Mirror upstream branch into fork main
+        run: |
+          set -euo pipefail
+          git branch -f "${MIRROR_BRANCH}" "upstream/${MIRROR_BRANCH}"
+          git push origin "refs/heads/${MIRROR_BRANCH}:refs/heads/${MIRROR_BRANCH}"
+
+      - name: Mirror latest upstream release tag
+        env:
+          UPSTREAM_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${UPSTREAM_TAG}" ]; then
+            echo "Latest upstream release tag is empty" >&2
+            exit 1
+          fi
+          git rev-parse "refs/tags/${UPSTREAM_TAG}" >/dev/null
+
+          REMOTE_SHA="$(git ls-remote --tags origin "refs/tags/${UPSTREAM_TAG}" | awk '{print $1}')"
+          LOCAL_SHA="$(git rev-list -n 1 "refs/tags/${UPSTREAM_TAG}")"
+          if [ -n "${REMOTE_SHA}" ] && [ "${REMOTE_SHA}" = "${LOCAL_SHA}" ]; then
+            echo "Tag ${UPSTREAM_TAG} is already mirrored"
+            exit 0
+          fi
+
+          git push origin "refs/tags/${UPSTREAM_TAG}:refs/tags/${UPSTREAM_TAG}"
+
+      - name: Detect whether main has new upstream commits for custom branch
+        id: ahead
+        run: |
+          set -euo pipefail
+          git fetch origin "${CUSTOM_BRANCH}"
+          AHEAD_COUNT="$(git rev-list --right-only --count "origin/${CUSTOM_BRANCH}...${MIRROR_BRANCH}")"
+          if [ "${AHEAD_COUNT}" -gt 0 ]; then
+            echo "has_new_upstream_commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_new_upstream_commits=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update sync PR
+        if: steps.ahead.outputs.has_new_upstream_commits == 'true'
+        id: pr
+        env:
+          UPSTREAM_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          EXISTING_PR="$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --head "${MIRROR_BRANCH}" \
+            --base "${CUSTOM_BRANCH}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          TITLE="sync: upstream ${UPSTREAM_TAG} into ${CUSTOM_BRANCH}"
+          BODY_FILE="$(mktemp)"
+          cat > "${BODY_FILE}" <<EOF
+          This PR mirrors the latest upstream release flow into \`${CUSTOM_BRANCH}\`.
+
+          - Upstream repository: \`${UPSTREAM_REPO}\`
+          - Upstream release branch: \`${MIRROR_BRANCH}\`
+          - Latest upstream release tag: \`${UPSTREAM_TAG}\`
+          - Fork mirror branch: \`${MIRROR_BRANCH}\`
+          - Fork custom branch: \`${CUSTOM_BRANCH}\`
+
+          Merge this PR to rebuild and publish the fork release from \`${CUSTOM_BRANCH}\`.
+          EOF
+
+          if [ -n "${EXISTING_PR}" ]; then
+            gh pr edit "${EXISTING_PR}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${TITLE}" \
+              --body-file "${BODY_FILE}"
+            PR_NUMBER="${EXISTING_PR}"
+          else
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --head "${MIRROR_BRANCH}" \
+              --base "${CUSTOM_BRANCH}" \
+              --title "${TITLE}" \
+              --body-file "${BODY_FILE}"
+            PR_NUMBER="$(gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --head "${MIRROR_BRANCH}" \
+              --base "${CUSTOM_BRANCH}" \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty')"
+          fi
+
+          echo "number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge sync PR when clean
+        if: steps.pr.outputs.number != ''
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3 4 5; do
+            MERGE_STATE="$(gh pr view "${PR_NUMBER}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json mergeStateStatus \
+              --jq '.mergeStateStatus')"
+            case "${MERGE_STATE}" in
+              CLEAN|HAS_HOOKS|UNSTABLE)
+                HEAD_SHA="$(gh pr view "${PR_NUMBER}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --json headRefOid \
+                  --jq '.headRefOid')"
+                gh pr merge "${PR_NUMBER}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --merge \
+                  --match-head-commit "${HEAD_SHA}"
+                exit 0
+                ;;
+              BLOCKED|DIRTY|DRAFT)
+                echo "PR #${PR_NUMBER} is not mergeable automatically (state: ${MERGE_STATE})"
+                exit 0
+                ;;
+              *)
+                echo "PR #${PR_NUMBER} merge state is ${MERGE_STATE}; waiting for GitHub to finish evaluation"
+                sleep 5
+                ;;
+            esac
+          done
+
+          echo "PR #${PR_NUMBER} did not become auto-mergeable in time; leaving it open"
