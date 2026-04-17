@@ -43,35 +43,12 @@ struct MarkdownPanelView: View {
     }
 
     private var markdownContentView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            filePathHeader
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
-
-            Divider()
-                .padding(.horizontal, 16)
-
-            RunestoneMarkdownTextSurface(
-                markdown: panel.content,
-                colorScheme: colorScheme
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private var filePathHeader: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "doc.richtext")
-                .foregroundColor(.secondary)
-                .font(.system(size: 12))
-            Text(panel.filePath)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-        }
+        RunestoneMarkdownTextSurface(
+            markdown: panel.content,
+            ghosttyConfig: ghosttyConfig,
+            isFocused: isFocused
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var fileUnavailableView: some View {
@@ -82,13 +59,6 @@ struct MarkdownPanelView: View {
             Text(String(localized: "markdown.fileUnavailable.title", defaultValue: "File unavailable"))
                 .font(.headline)
                 .foregroundColor(.primary)
-            Text(panel.filePath)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 24)
             Text(String(localized: "markdown.fileUnavailable.message", defaultValue: "The file may have been moved or deleted."))
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -97,9 +67,22 @@ struct MarkdownPanelView: View {
     }
 
     private var backgroundColor: Color {
-        colorScheme == .dark
-            ? Color(nsColor: NSColor(white: 0.12, alpha: 1.0))
-            : Color(nsColor: NSColor(white: 0.98, alpha: 1.0))
+        Color(nsColor: ghosttyConfig.backgroundColor)
+    }
+
+    private var ghosttyConfig: GhosttyConfig {
+        GhosttyConfig.load(preferredColorScheme: preferredColorScheme)
+    }
+
+    private var preferredColorScheme: GhosttyConfig.ColorSchemePreference {
+        switch colorScheme {
+        case .dark:
+            return .dark
+        case .light:
+            return .light
+        @unknown default:
+            return .dark
+        }
     }
 
     private func triggerFocusFlashAnimation() {
@@ -129,24 +112,27 @@ struct MarkdownPanelView: View {
 
 struct RunestoneMarkdownTextSurface: NSViewRepresentable {
     let markdown: String
-    let colorScheme: ColorScheme
+    let ghosttyConfig: GhosttyConfig
+    let isFocused: Bool
 
     func makeNSView(context: Context) -> MarkdownPanelRunestoneView {
         let view = MarkdownPanelRunestoneView()
-        view.update(markdown: markdown, colorScheme: colorScheme)
+        view.update(markdown: markdown, ghosttyConfig: ghosttyConfig, isFocused: isFocused)
         return view
     }
 
     func updateNSView(_ nsView: MarkdownPanelRunestoneView, context: Context) {
-        nsView.update(markdown: markdown, colorScheme: colorScheme)
+        nsView.update(markdown: markdown, ghosttyConfig: ghosttyConfig, isFocused: isFocused)
     }
 }
 
-final class MarkdownPanelRunestoneView: NSView {
+final class MarkdownPanelRunestoneView: NSView, TextViewDelegate {
     let editor = TextView(frame: .zero)
 
     private var currentMarkdown = ""
     private var currentThemeKey = ""
+    private var currentFocusState = false
+    private var wantsFirstResponderWhenAttached = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -168,13 +154,21 @@ final class MarkdownPanelRunestoneView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(markdown: String, colorScheme: ColorScheme) {
-        let theme = MarkdownPanelTheme(colorScheme: colorScheme)
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if wantsFirstResponderWhenAttached {
+            focusEditorIfNeeded()
+        }
+    }
+
+    func update(markdown: String, ghosttyConfig: GhosttyConfig, isFocused: Bool) {
+        let theme = MarkdownPanelTheme(config: ghosttyConfig)
         let themeKey = theme.cacheKey
         let themeChanged = themeKey != currentThemeKey
         let contentChanged = markdown != currentMarkdown
+        let focusChanged = isFocused != currentFocusState
 
-        guard themeChanged || contentChanged else {
+        guard themeChanged || contentChanged || focusChanged else {
             return
         }
 
@@ -191,8 +185,13 @@ final class MarkdownPanelRunestoneView: NSView {
         editor.backgroundColor = theme.editorBackgroundColor
         editor.textView.backgroundColor = theme.editorBackgroundColor
         editor.textView.textColor = theme.textColor
+        editor.textView.selectedTextAttributes = [
+            .backgroundColor: ghosttyConfig.selectionBackground,
+            .foregroundColor: ghosttyConfig.selectionForeground
+        ]
         editor.selectionBarColor = theme.textColor
         editor.selectionHighlightColor = theme.markedTextBackgroundColor
+        editor.insertionPointColor = ghosttyConfig.cursorColor
 
         if contentChanged {
             editor.text = markdown
@@ -216,10 +215,17 @@ final class MarkdownPanelRunestoneView: NSView {
         }
 
         currentThemeKey = themeKey
+        currentFocusState = isFocused
+        if isFocused && focusChanged {
+            focusEditorIfNeeded()
+        } else if !isFocused {
+            wantsFirstResponderWhenAttached = false
+        }
     }
 
     private func configureEditor() {
-        editor.isEditable = false
+        editor.editorDelegate = self
+        editor.isEditable = true
         editor.isSelectable = true
         editor.showLineNumbers = false
         editor.gutterLeadingPadding = 0
@@ -230,7 +236,7 @@ final class MarkdownPanelRunestoneView: NSView {
         editor.hasHorizontalScroller = false
         editor.hasVerticalScroller = true
         editor.borderType = .noBorder
-        editor.textView.textContainerInset = NSSize(width: 24, height: 16)
+        editor.textView.textContainerInset = NSSize(width: 10, height: 8)
         editor.textView.isAutomaticQuoteSubstitutionEnabled = false
         editor.textView.isAutomaticDashSubstitutionEnabled = false
         editor.textView.isAutomaticTextReplacementEnabled = false
@@ -241,6 +247,8 @@ final class MarkdownPanelRunestoneView: NSView {
         editor.textView.isContinuousSpellCheckingEnabled = false
         editor.textView.isGrammarCheckingEnabled = false
         editor.textView.allowsUndo = false
+        editor.textView.isRichText = false
+        editor.textView.usesFindPanel = true
     }
 
     private func markdownScrollRatio(originY: CGFloat, documentHeight: CGFloat, viewportHeight: CGFloat) -> CGFloat {
@@ -257,6 +265,22 @@ final class MarkdownPanelRunestoneView: NSView {
         let restoredY = scrollableHeight * previousRatio
         editor.contentView.scroll(to: NSPoint(x: 0, y: restoredY))
         editor.reflectScrolledClipView(editor.contentView)
+    }
+
+    func textView(_ textView: TextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        false
+    }
+
+    private func focusEditorIfNeeded() {
+        guard let window else {
+            wantsFirstResponderWhenAttached = true
+            return
+        }
+        wantsFirstResponderWhenAttached = false
+        guard !editor.textView.isFirstResponder(in: window) else {
+            return
+        }
+        _ = window.makeFirstResponder(editor.textView)
     }
 }
 
@@ -291,50 +315,58 @@ final class MarkdownPanelTheme: Theme {
     private let codeFontValue: NSFont
     private let headingFonts: [NSFont]
 
-    init(colorScheme: ColorScheme) {
-        let isDark = colorScheme == .dark
-        let baseFont = NSFont.systemFont(ofSize: 14, weight: .regular)
-        cacheKey = isDark ? "dark" : "light"
+    init(config: GhosttyConfig) {
+        let isLightBackground = config.backgroundColor.isLightColor
+        let baseFont = MarkdownPanelTheme.font(
+            family: config.fontFamily,
+            size: config.fontSize,
+            weight: .regular
+        )
+        cacheKey = [
+            config.fontFamily,
+            String(format: "%.2f", config.fontSize),
+            config.backgroundColor.hexString(),
+            config.foregroundColor.hexString(),
+            config.cursorColor.hexString(),
+            config.selectionBackground.hexString(),
+            config.selectionForeground.hexString(),
+            config.palette[2]?.hexString() ?? "nil",
+            config.palette[4]?.hexString() ?? "nil",
+            config.palette[5]?.hexString() ?? "nil"
+        ].joined(separator: "|")
 
         font = baseFont
-        lineNumberFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        lineNumberFont = MarkdownPanelTheme.font(
+            family: config.fontFamily,
+            size: max(config.fontSize - 1, 10),
+            weight: .regular
+        )
         strongFontValue = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
         emphasisFontValue = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
-        codeFontValue = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        codeFontValue = MarkdownPanelTheme.font(
+            family: config.fontFamily,
+            size: config.fontSize,
+            weight: .regular
+        )
 
-        if isDark {
-            editorBackgroundColor = NSColor(white: 0.12, alpha: 1.0)
-            textColor = NSColor(white: 0.92, alpha: 1.0)
-            secondaryTextColor = NSColor(white: 0.72, alpha: 1.0)
-            tertiaryTextColor = NSColor(white: 0.55, alpha: 1.0)
-            headingColor = NSColor.systemPurple.withAlphaComponent(0.95)
-            linkColor = NSColor.systemBlue.withAlphaComponent(0.95)
-            quoteColor = NSColor(white: 0.68, alpha: 1.0)
-            codeColor = NSColor.systemGreen.withAlphaComponent(0.95)
-            codeBackgroundColor = NSColor(white: 0.18, alpha: 1.0)
-            separatorColor = NSColor(white: 0.35, alpha: 1.0)
-            gutterHairlineColor = NSColor(white: 0.22, alpha: 1.0)
-            pageGuideHairlineColor = NSColor(white: 0.22, alpha: 1.0)
-            pageGuideBackgroundColor = NSColor(white: 0.16, alpha: 1.0)
-            markedTextBackgroundColor = NSColor.selectedTextBackgroundColor.withAlphaComponent(0.28)
-            selectedLineBackgroundColor = NSColor.selectedTextBackgroundColor.withAlphaComponent(0.10)
-        } else {
-            editorBackgroundColor = NSColor(white: 0.98, alpha: 1.0)
-            textColor = NSColor.labelColor
-            secondaryTextColor = NSColor.secondaryLabelColor
-            tertiaryTextColor = NSColor.tertiaryLabelColor
-            headingColor = NSColor.systemPurple
-            linkColor = NSColor.linkColor
-            quoteColor = NSColor.secondaryLabelColor
-            codeColor = NSColor.systemGreen.blended(withFraction: 0.35, of: NSColor.labelColor) ?? NSColor.systemGreen
-            codeBackgroundColor = NSColor(white: 0.93, alpha: 1.0)
-            separatorColor = NSColor.separatorColor
-            gutterHairlineColor = NSColor.separatorColor
-            pageGuideHairlineColor = NSColor.separatorColor
-            pageGuideBackgroundColor = NSColor(white: 0.96, alpha: 1.0)
-            markedTextBackgroundColor = NSColor.selectedTextBackgroundColor.withAlphaComponent(0.22)
-            selectedLineBackgroundColor = NSColor.selectedTextBackgroundColor.withAlphaComponent(0.08)
-        }
+        editorBackgroundColor = config.backgroundColor
+        textColor = config.foregroundColor
+        secondaryTextColor = config.foregroundColor.blended(withFraction: 0.28, of: config.backgroundColor) ?? config.foregroundColor
+        tertiaryTextColor = config.foregroundColor.blended(withFraction: 0.5, of: config.backgroundColor) ?? config.foregroundColor
+        headingColor = config.palette[5] ?? config.palette[13] ?? config.foregroundColor
+        linkColor = config.palette[4] ?? config.palette[12] ?? config.foregroundColor
+        quoteColor = secondaryTextColor
+        codeColor = config.palette[2] ?? config.palette[10] ?? config.foregroundColor
+        codeBackgroundColor = config.backgroundColor.blended(
+            withFraction: isLightBackground ? 0.18 : 0.28,
+            of: config.selectionBackground
+        ) ?? config.selectionBackground
+        separatorColor = tertiaryTextColor
+        gutterHairlineColor = tertiaryTextColor.withAlphaComponent(isLightBackground ? 0.3 : 0.45)
+        pageGuideHairlineColor = gutterHairlineColor
+        pageGuideBackgroundColor = codeBackgroundColor
+        markedTextBackgroundColor = config.selectionBackground.withAlphaComponent(isLightBackground ? 0.22 : 0.3)
+        selectedLineBackgroundColor = config.selectionBackground.withAlphaComponent(isLightBackground ? 0.08 : 0.12)
 
         gutterBackgroundColor = editorBackgroundColor
         lineNumberColor = tertiaryTextColor
@@ -344,8 +376,27 @@ final class MarkdownPanelTheme: Theme {
 
         headingFonts = (1...6).map { level in
             let size = baseFont.pointSize + CGFloat(7 - level) * 2.6
-            return NSFont.systemFont(ofSize: size, weight: level <= 2 ? .bold : .semibold)
+            return MarkdownPanelTheme.font(
+                family: config.fontFamily,
+                size: size,
+                weight: level <= 2 ? .bold : .semibold
+            )
         }
+    }
+
+    private static func font(family: String, size: CGFloat, weight: NSFont.Weight) -> NSFont {
+        if let font = NSFontManager.shared.font(
+            withFamily: family,
+            traits: weight >= .semibold ? .boldFontMask : [],
+            weight: weight >= .bold ? 9 : (weight >= .semibold ? 7 : 5),
+            size: size
+        ) {
+            return font
+        }
+        if let font = NSFont(name: family, size: size) {
+            return font
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
     }
 
     func headingFont(for level: Int) -> NSFont {
@@ -362,6 +413,28 @@ final class MarkdownPanelTheme: Theme {
 
     var codeFont: NSFont {
         codeFontValue
+    }
+}
+
+private extension NSResponder {
+    func isDescendant(of ancestor: NSResponder) -> Bool {
+        var current: NSResponder? = self
+        while let responder = current {
+            if responder === ancestor {
+                return true
+            }
+            current = responder.nextResponder
+        }
+        return false
+    }
+}
+
+private extension NSTextView {
+    func isFirstResponder(in window: NSWindow) -> Bool {
+        guard let responder = window.firstResponder else {
+            return false
+        }
+        return responder === self || responder.isDescendant(of: self)
     }
 }
 
