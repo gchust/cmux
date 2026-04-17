@@ -8,7 +8,7 @@ Status on `2026-04-16`:
 2. done, the root AppKit host now owns a dedicated `WorkspaceLayoutViewportCanvasView` that retains one surface host per `WorkspacePaneMountIdentity`.
 3. done, pane hosts are now shell-only, tab chrome plus drop overlay, and no longer install pane content directly.
 4. done, terminal, browser, markdown, and placeholder content now mount only through the retained viewport path, and selected-only visibility replaced the old focused-but-unselected fallback.
-5. done, targeted verification passed locally with `37` tests and `0` failures (`WorkspaceContentViewVisibilityTests`, `WorkspaceLayoutSimplificationTests`, `WorkspaceSurfaceRegistryTests`), passed again on `ssh cmux-macmini` with `32` tests and `0` failures using `CMUX_SKIP_ZIG_BUILD=1`, and the tagged reload completed for `issue-2289-appkit-split-host`.
+5. done, targeted verification passed locally with `39` tests and `0` failures (`WorkspaceContentViewVisibilityTests`, `WorkspaceLayoutSimplificationTests`, `WorkspaceSurfaceRegistryTests`), passed again on `ssh cmux-macmini` with `32` tests and `0` failures using `CMUX_SKIP_ZIG_BUILD=1`, and the retained-host coverage now directly exercises browser and markdown mount, reuse, and unmount behavior in addition to terminal and placeholder paths.
 
 ## Current Cycle (7-step focus/visibility refactor)
 
@@ -59,6 +59,7 @@ Implemented on `2026-04-16`:
 - pane-host content refresh now compares explicit mount identity before reuse, so content-kind transitions tear down deterministically instead of relying on `installContentView` side effects
 - off-window terminal mounts now keep the hosted view installed immediately and only defer the runtime `attachSurface` step until a real window-backed refresh, which removes the blank-pane root-collapse failure during split close
 - regression coverage now checks the new retained-surface contract directly, including off-window terminal mounting, shared-slot content replacement, workspace-selected displayed content, placeholder mounting, terminal-host detachment on surface removal, and later attachment after the host enters a window
+- retained-surface regression coverage now also directly checks browser and markdown mount, remount reuse, and unmount behavior through `WorkspaceSurfaceRegistryTests`, so every currently supported surface kind is exercised through the new viewport path
 - `Workspace` now conforms to the `WorkspaceLayoutHost` protocol directly, so production rendering no longer stores or passes a `WorkspaceLayoutController` bridge through `Workspace` and `WorkspaceContentView`
 - the AppKit layout host now talks to `Workspace` through that host protocol for geometry, drag, split, close, zoom, context action, file-drop, and external-tab-drop routing
 - `WorkspaceLayoutControllerHostAdapter` is gone, because the native tab-button leaf now receives explicit action closures for select, close, zoom, context actions, and drag lifecycle instead of retaining the full host protocol just for preview and debug wiring

@@ -3198,12 +3198,43 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
         )
     }
 
+    private func browserDescriptor(
+        for panelId: UUID,
+        paneId: PaneID
+    ) -> WorkspaceBrowserPaneContent {
+        WorkspaceBrowserPaneContent(
+            surfaceId: panelId,
+            paneId: paneId,
+            isFocused: true,
+            isVisibleInUI: true,
+            portalPriority: 0,
+            onRequestPanelFocus: {}
+        )
+    }
+
+    private func markdownDescriptor(for panelId: UUID) -> WorkspaceMarkdownPaneContent {
+        WorkspaceMarkdownPaneContent(
+            surfaceId: panelId,
+            isVisibleInUI: true,
+            onRequestPanelFocus: {}
+        )
+    }
+
     private func placeholderDescriptor(paneId: PaneID = PaneID()) -> WorkspacePlaceholderPaneContent {
         WorkspacePlaceholderPaneContent(
             paneId: paneId,
             onCreateTerminal: {},
             onCreateBrowser: {}
         )
+    }
+
+    private func temporaryMarkdownFile() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-surface-registry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fileURL = root.appendingPathComponent("note.md")
+        try "# retained markdown host\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        return fileURL
     }
 
     func testOffWindowTerminalMountKeepsHostedViewInstalled() {
@@ -3312,6 +3343,113 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
         workspace.surfaceRegistry.unmountContent(
             .placeholder(descriptor),
             contentId: paneId.id,
+            from: slotView
+        )
+
+        XCTAssertTrue(slotView.subviews.isEmpty)
+    }
+
+    func testBrowserMountReusesRetainedContentViewAndUnmountClearsIt() throws {
+        let workspace = Workspace()
+        guard let paneId = workspace.focusedPaneId,
+              let panel = workspace.createBrowserPanel(inPane: paneId, focus: false) else {
+            XCTFail("Expected browser panel")
+            return
+        }
+
+        let descriptor = browserDescriptor(for: panel.id, paneId: paneId)
+        let content = WorkspacePaneContent.browser(descriptor)
+        let slotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 220)
+        )
+
+        workspace.surfaceRegistry.mountContent(
+            content,
+            contentId: panel.id,
+            in: slotView,
+            activeDropZone: nil
+        )
+
+        let initialView = try XCTUnwrap(
+            slotView.subviews.first,
+            "Expected browser mount to install a retained content view"
+        )
+        XCTAssertTrue(initialView is BrowserPanelWorkspaceContentView)
+        XCTAssertEqual(slotView.subviews.count, 1)
+        XCTAssertFalse(slotView.isHidden)
+
+        workspace.surfaceRegistry.mountContent(
+            content,
+            contentId: panel.id,
+            in: slotView,
+            activeDropZone: nil
+        )
+
+        XCTAssertEqual(slotView.subviews.count, 1)
+        XCTAssertTrue(
+            slotView.subviews.first === initialView,
+            "Expected browser remount to reuse the retained workspace content view"
+        )
+
+        workspace.surfaceRegistry.unmountContent(
+            content,
+            contentId: panel.id,
+            from: slotView
+        )
+
+        XCTAssertTrue(slotView.subviews.isEmpty)
+    }
+
+    func testMarkdownMountReusesRetainedContentViewAndUnmountClearsIt() throws {
+        let workspace = Workspace()
+        let fileURL = try temporaryMarkdownFile()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        guard let paneId = workspace.focusedPaneId,
+              let panel = workspace.createMarkdownPanel(
+                inPane: paneId,
+                filePath: fileURL.path,
+                focus: false
+              ) else {
+            XCTFail("Expected markdown panel")
+            return
+        }
+
+        let descriptor = markdownDescriptor(for: panel.id)
+        let content = WorkspacePaneContent.markdown(descriptor)
+        let slotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 220)
+        )
+
+        workspace.surfaceRegistry.mountContent(
+            content,
+            contentId: panel.id,
+            in: slotView,
+            activeDropZone: nil
+        )
+
+        let initialView = try XCTUnwrap(
+            slotView.subviews.first,
+            "Expected markdown mount to install a retained hosting view"
+        )
+        XCTAssertEqual(slotView.subviews.count, 1)
+        XCTAssertFalse(slotView.isHidden)
+
+        workspace.surfaceRegistry.mountContent(
+            content,
+            contentId: panel.id,
+            in: slotView,
+            activeDropZone: nil
+        )
+
+        XCTAssertEqual(slotView.subviews.count, 1)
+        XCTAssertTrue(
+            slotView.subviews.first === initialView,
+            "Expected markdown remount to reuse the retained hosting view"
+        )
+
+        workspace.surfaceRegistry.unmountContent(
+            content,
+            contentId: panel.id,
             from: slotView
         )
 
