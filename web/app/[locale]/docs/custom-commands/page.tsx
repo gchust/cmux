@@ -1,8 +1,41 @@
+import fs from "fs";
+import path from "path";
+import Image from "next/image";
 import { useTranslations } from "next-intl";
 import { getTranslations } from "next-intl/server";
 import { buildAlternates } from "../../../../i18n/seo";
 import { CodeBlock } from "../../components/code-block";
 import { Callout } from "../../components/callout";
+
+function pngDimensions(filePath: string): { width: number; height: number } {
+  const abs = path.join(process.cwd(), "public", filePath);
+  const buf = fs.readFileSync(abs);
+  return {
+    width: buf.readUInt32BE(16),
+    height: buf.readUInt32BE(24),
+  };
+}
+
+function DocsImage({ src, alt, caption }: { src: string; alt: string; caption: string }) {
+  const { width, height } = pngDimensions(src);
+  return (
+    <figure className="my-6">
+      <div className="overflow-hidden rounded-lg border border-border bg-muted/20">
+        <Image
+          src={src}
+          alt={alt}
+          width={width}
+          height={height}
+          sizes="(max-width: 640px) 100vw, 640px"
+          className="block h-auto w-full"
+        />
+      </div>
+      <figcaption className="mt-2 text-sm text-muted">
+        {caption}
+      </figcaption>
+    </figure>
+  );
+}
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
@@ -26,31 +59,269 @@ export default function CustomCommandsPage() {
       <p>{t("fileLocationsDesc")}</p>
       <ul>
         <li>
-          <strong>{t("localConfig")}</strong> <code>./cmux.json</code> &mdash; {t("localConfigDesc")}
+          <strong>{t("localConfig")}</strong> <code>./.cmux/cmux.json</code> - {t("localConfigDesc")}
         </li>
         <li>
-          <strong>{t("globalConfig")}</strong> <code>~/.config/cmux/cmux.json</code> &mdash; {t("globalConfigDesc")}
+          <strong>{t("fallbackLocal")}</strong> <code>./cmux.json</code> - {t("fallbackLocalDesc")}
+        </li>
+        <li>
+          <strong>{t("globalConfig")}</strong> <code>~/.config/cmux/cmux.json</code> - {t("globalConfigDesc")}
         </li>
       </ul>
       <Callout type="info">{t("precedenceNote")}</Callout>
+      <Callout type="info">
+        {t.rich("nightlyFeatureCallout", {
+          actions: (chunks) => <code>{chunks}</code>,
+          shortcut: (chunks) => <code>{chunks}</code>,
+          buttons: (chunks) => <code>{chunks}</code>,
+        })}
+      </Callout>
+      <Callout type="info">
+        {t("trustCallout")}
+      </Callout>
+      <Callout type="info">
+        {t.rich("schemaErrorCallout", {
+          title: (chunks) => <strong>{chunks}</strong>,
+        })}
+      </Callout>
       <p>{t("liveReload")}</p>
 
       <h2>{t("schema")}</h2>
-      <p>{t("schemaDesc")}</p>
+      <p>
+        {t.rich("schemaIntro", {
+          commands: (chunks) => <code>{chunks}</code>,
+          actions: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
       <CodeBlock title="cmux.json" lang="json">{`{
+  "actions": {
+    "cmux.newTerminal": {
+      "type": "command",
+      "title": "Codex",
+      "subtitle": "Open Codex in a new terminal tab",
+      "command": "codex --dangerously-bypass-approvals-and-sandbox",
+      "target": "newTabInCurrentPane",
+      "shortcut": "cmd+t",
+      "icon": { "type": "image", "path": "./icons/codex.svg" }
+    },
+    "claude": {
+      "type": "command",
+      "title": "Claude Code",
+      "command": "claude --dangerously-skip-permissions",
+      "target": "newTabInCurrentPane",
+      "shortcut": "cmd+shift+c",
+      "icon": { "type": "image", "path": "./icons/claude.svg" }
+    },
+    "opencode": {
+      "type": "command",
+      "title": "OpenCode",
+      "command": "opencode",
+      "target": "newTabInCurrentPane",
+      "palette": false,
+      "icon": { "type": "emoji", "value": "🧪", "scale": 0.9 }
+    },
+    "web-dev": {
+      "type": "workspaceCommand",
+      "title": "Web Dev",
+      "commandName": "Web Dev"
+    }
+  },
+  "ui": {
+    "surfaceTabBar": {
+      "buttons": [
+        "cmux.newTerminal",
+        "cmux.newBrowser",
+        "cmux.splitRight",
+        "cmux.splitDown",
+        "claude"
+      ]
+    }
+  },
   "commands": [
     {
-      "name": "Start Dev",
+      "name": "Web Dev",
       "keywords": ["dev", "start"],
       "workspace": { ... }
-    },
-    {
-      "name": "Run Tests",
-      "command": "npm test",
-      "confirm": true
     }
   ]
 }`}</CodeBlock>
+      <h3>{t("nightlyActionRegistry")}</h3>
+      <p>
+        {t.rich("nightlyActionRegistryDesc", {
+          actions: (chunks) => <code>{chunks}</code>,
+          newTerminal: (chunks) => <code>{chunks}</code>,
+          newBrowser: (chunks) => <code>{chunks}</code>,
+          splitRight: (chunks) => <code>{chunks}</code>,
+          splitDown: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
+      <p>
+        {t.rich("paletteDesc", {
+          palette: (chunks) => <code>{chunks}</code>,
+          trueValue: (chunks) => <code>{chunks}</code>,
+          falseValue: (chunks) => <code>{chunks}</code>,
+          shortcut: (chunks) => <code>{chunks}</code>,
+          singleShortcut: (chunks) => <code>{chunks}</code>,
+          chordShortcut: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
+      <p>
+        {t.rich("iconsDesc", {
+          buttons: (chunks) => <code>{chunks}</code>,
+          symbolIcon: (chunks) => <code>{chunks}</code>,
+          emojiIcon: (chunks) => <code>{chunks}</code>,
+          imageIcon: (chunks) => <code>{chunks}</code>,
+          scale: (chunks) => <code>{chunks}</code>,
+          defaultScale: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
+      <p>
+        {t("buttonEntriesDesc")}
+      </p>
+      <p>
+        {t.rich("permissionFlagsDesc", {
+          target: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
+
+      <h2>{t("customActions")}</h2>
+      <p>
+        {t.rich("customActionsDesc", {
+          actions: (chunks) => <code>{chunks}</code>,
+          commands: (chunks) => <code>{chunks}</code>,
+          palette: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
+      <h3>{t("actionTypes")}</h3>
+      <ul>
+        <li><code>&quot;builtin&quot;</code>: {t("actionTypeBuiltin")}</li>
+        <li><code>&quot;command&quot;</code>: {t("actionTypeCommand")}</li>
+        <li><code>&quot;agent&quot;</code>: {t("actionTypeAgent")}</li>
+        <li><code>&quot;workspaceCommand&quot;</code>: {t("actionTypeWorkspaceCommand")}</li>
+      </ul>
+      <h3>{t("actionFields")}</h3>
+      <ul>
+        <li><code>title</code>: {t("actionFieldTitle")}</li>
+        <li><code>subtitle</code> / <code>description</code>: {t("actionFieldSubtitle")}</li>
+        <li><code>keywords</code>: {t("actionFieldKeywords")}</li>
+        <li><code>palette</code>: {t("actionFieldPalette")}</li>
+        <li><code>shortcut</code>: {t("actionFieldShortcut")}</li>
+        <li><code>target</code>: {t("actionFieldTarget")}</li>
+        <li><code>confirm</code>: {t("actionFieldConfirm")}</li>
+      </ul>
+      <h3>{t("commandPaletteBehavior")}</h3>
+      <p>
+        {t.rich("commandPaletteBehaviorDesc", {
+          palette: (chunks) => <code>{chunks}</code>,
+          commands: (chunks) => <code>{chunks}</code>,
+          newTerminal: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
+      <DocsImage
+        src="/docs/custom-actions-command-palette.png"
+        alt={t("commandPaletteScreenshotAlt")}
+        caption={t("commandPaletteScreenshotCaption")}
+      />
+
+      <h2>{t("newWorkspaceButton")}</h2>
+      <p>
+        {t.rich("newWorkspaceButtonDesc", {
+          action: (chunks) => <code>{chunks}</code>,
+          contextMenu: (chunks) => <code>{chunks}</code>,
+          rightClick: (chunks) => <code>{chunks}</code>,
+          separator: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
+      <DocsImage
+        src="/docs/custom-actions-plus-menu.png"
+        alt={t("plusButtonScreenshotAlt")}
+        caption={t("plusButtonScreenshotCaption")}
+      />
+      <CodeBlock title="cmux.json" lang="json">{`{
+  "actions": {
+    "worktree-agents": {
+      "type": "workspaceCommand",
+      "title": "Worktree Agents",
+      "commandName": "Worktree Agents",
+      "icon": { "type": "symbol", "name": "folder.badge.plus" }
+    }
+  },
+  "ui": {
+    "newWorkspace": {
+      "action": "worktree-agents",
+      "contextMenu": [
+        { "action": "worktree-agents", "title": "Worktree Agents" },
+        { "type": "separator" },
+        { "action": "cmux.newTerminal", "title": "New Terminal" },
+        { "action": "cmux.newBrowser", "title": "New Browser" }
+      ]
+    }
+  },
+  "commands": [
+    {
+      "name": "Worktree Agents",
+      "description": "Create a fresh Git worktree and start Codex and Claude inside it",
+      "workspace": {
+        "name": "Worktree Agents",
+        "cwd": ".",
+        "layout": {
+          "direction": "horizontal",
+          "split": 0.38,
+          "children": [
+            {
+              "pane": {
+                "surfaces": [
+                  {
+                    "type": "terminal",
+                    "name": "Worktree",
+                    "command": "set -euo pipefail; state=\\"\${TMPDIR:-/tmp}/cmux-worktree-\${CMUX_WORKSPACE_ID:-manual}.dir\\"; rm -f \\"$state\\"; repo=$(git rev-parse --show-toplevel); mkdir -p \\"$repo/../worktrees\\"; slug=agents-$(date +%Y%m%d-%H%M%S); dir=\\"$repo/../worktrees/$slug\\"; git -C \\"$repo\\" worktree add -b \\"$slug\\" \\"$dir\\"; printf \\"%s\\\\n\\" \\"$dir\\" > \\"$state\\"; cd \\"$dir\\"; exec \\"\${SHELL:-/bin/zsh}\\" -l",
+                    "focus": true
+                  }
+                ]
+              }
+            },
+            {
+              "direction": "vertical",
+              "split": 0.5,
+              "children": [
+                {
+                  "pane": {
+                    "surfaces": [
+                      {
+                        "type": "terminal",
+                        "name": "Codex",
+                        "command": "state=\\"\${TMPDIR:-/tmp}/cmux-worktree-\${CMUX_WORKSPACE_ID:-manual}.dir\\"; echo \\"Waiting for worktree...\\"; while [ ! -s \\"$state\\" ]; do sleep 0.2; done; dir=$(cat \\"$state\\"); cd \\"$dir\\"; exec codex --dangerously-bypass-approvals-and-sandbox"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "pane": {
+                    "surfaces": [
+                      {
+                        "type": "terminal",
+                        "name": "Claude",
+                        "command": "state=\\"\${TMPDIR:-/tmp}/cmux-worktree-\${CMUX_WORKSPACE_ID:-manual}.dir\\"; echo \\"Waiting for worktree...\\"; while [ ! -s \\"$state\\" ]; do sleep 0.2; done; dir=$(cat \\"$state\\"); cd \\"$dir\\"; exec claude --dangerously-skip-permissions"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}`}</CodeBlock>
+      <p>
+        {t.rich("newWorkspaceWorktreeNote", {
+          action: (chunks) => <code>{chunks}</code>,
+          commands: (chunks) => <code>{chunks}</code>,
+          worktree: (chunks) => <code>{chunks}</code>,
+          codex: (chunks) => <code>{chunks}</code>,
+        })}
+      </p>
 
       <h2>{t("simpleCommands")}</h2>
       <p>{t("simpleCommandsDesc")}</p>
@@ -82,7 +353,6 @@ export default function CustomCommandsPage() {
     {
       "name": "Dev Environment",
       "keywords": ["dev", "fullstack"],
-      "restart": "confirm",
       "workspace": {
         "name": "Dev",
         "cwd": ".",
@@ -133,6 +403,7 @@ export default function CustomCommandsPage() {
       <h3>{t("restartBehavior")}</h3>
       <p>{t("restartBehaviorDesc")}</p>
       <ul>
+        <li><code>&quot;new&quot;</code> &mdash; {t("restartNew")}</li>
         <li><code>&quot;ignore&quot;</code> &mdash; {t("restartIgnore")}</li>
         <li><code>&quot;recreate&quot;</code> &mdash; {t("restartRecreate")}</li>
         <li><code>&quot;confirm&quot;</code> &mdash; {t("restartConfirm")}</li>
@@ -174,12 +445,51 @@ export default function CustomCommandsPage() {
 
       <h2>{t("fullExample")}</h2>
       <CodeBlock title="cmux.json" lang="json">{`{
+  "actions": {
+    "web-dev": { "type": "workspaceCommand", "commandName": "Web Dev" },
+    "cmux.newTerminal": {
+      "type": "command",
+      "title": "Codex",
+      "command": "codex --dangerously-bypass-approvals-and-sandbox",
+      "target": "newTabInCurrentPane",
+      "shortcut": "cmd+t",
+      "icon": { "type": "image", "path": "./icons/codex.svg" }
+    },
+    "claude": {
+      "type": "command",
+      "title": "Claude Code",
+      "command": "claude --dangerously-skip-permissions",
+      "target": "newTabInCurrentPane",
+      "shortcut": "cmd+shift+c",
+      "icon": { "type": "image", "path": "./icons/claude.svg" }
+    },
+    "start-dev": {
+      "type": "command",
+      "command": "npm run dev",
+      "target": "newTabInCurrentPane",
+      "icon": { "type": "symbol", "name": "play.circle" }
+    }
+  },
+  "ui": {
+    "surfaceTabBar": {
+      "buttons": [
+        "cmux.newTerminal",
+        "cmux.newBrowser",
+        "cmux.splitRight",
+        "cmux.splitDown",
+        {
+          "action": "claude",
+          "title": "Claude Here"
+        },
+        "start-dev"
+      ]
+    }
+  },
   "commands": [
     {
       "name": "Web Dev",
       "description": "Docs site with live preview",
       "keywords": ["web", "docs", "next", "frontend"],
-      "restart": "confirm",
       "workspace": {
         "name": "Web Dev",
         "cwd": "./web",
@@ -236,7 +546,6 @@ export default function CustomCommandsPage() {
       "name": "Debug Log",
       "description": "Tail the debug event log from the running dev app",
       "keywords": ["log", "debug", "tail", "events"],
-      "restart": "ignore",
       "workspace": {
         "name": "Debug Log",
         "layout": {

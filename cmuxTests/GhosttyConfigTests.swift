@@ -1,7 +1,9 @@
 import XCTest
 import AppKit
+import CoreText
 import WebKit
 import Darwin
+import SwiftUI
 
 #if canImport(cmux_DEV)
 @testable import cmux_DEV
@@ -92,6 +94,36 @@ final class GhosttyConfigTests: XCTestCase {
         XCTAssertTrue(paths.contains("\(pathB)/ghostty/themes/Solarized Light"))
     }
 
+    func testCmuxDefaultThemeConfigContentsSkipsInvalidUTF8Candidate() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("cmux-managed-theme-search-\(UUID().uuidString)")
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        let firstDataDir = root.appendingPathComponent("first", isDirectory: true)
+        let secondDataDir = root.appendingPathComponent("second", isDirectory: true)
+        let firstThemeDir = firstDataDir.appendingPathComponent("ghostty/themes", isDirectory: true)
+        let secondThemeDir = secondDataDir.appendingPathComponent("ghostty/themes", isDirectory: true)
+        try fileManager.createDirectory(at: firstThemeDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: secondThemeDir, withIntermediateDirectories: true)
+
+        let firstTheme = firstThemeDir.appendingPathComponent("Apple System Colors Light", isDirectory: false)
+        try Data([0xff, 0xfe]).write(to: firstTheme)
+
+        let secondTheme = secondThemeDir.appendingPathComponent("Apple System Colors Light", isDirectory: false)
+        let expected = "foreground = #123456\n"
+        try expected.write(to: secondTheme, atomically: true, encoding: .utf8)
+
+        let contents = GhosttyConfig.cmuxDefaultThemeConfigContents(
+            preferredColorScheme: .light,
+            environment: ["XDG_DATA_DIRS": "\(firstDataDir.path):\(secondDataDir.path)"],
+            bundleResourceURL: nil
+        )
+
+        XCTAssertEqual(contents, expected)
+    }
+
     func testLoadReadsSymlinkedGhosttyConfigFile() throws {
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory
@@ -178,6 +210,27 @@ final class GhosttyConfigTests: XCTestCase {
         var config = GhosttyConfig()
         config.parse("background-opacity = 0.42")
         XCTAssertEqual(config.backgroundOpacity, 0.42, accuracy: 0.0001)
+    }
+
+    func testParseBackgroundBlurReadsMacOSGlassClear() {
+        var config = GhosttyConfig()
+        config.parse("background-blur = macos-glass-clear")
+        XCTAssertEqual(config.backgroundBlur, .macosGlassClear)
+    }
+
+    func testParseBackgroundBlurReadsMacOSGlassRegular() {
+        var config = GhosttyConfig()
+        config.parse("background-blur = macos-glass-regular")
+        XCTAssertEqual(config.backgroundBlur, .macosGlassRegular)
+    }
+
+    func testParseBackgroundBlurIgnoresMalformedValues() {
+        var config = GhosttyConfig()
+        config.parse("""
+        background-blur = macos-glass-clear
+        background-blur = not-a-blur
+        """)
+        XCTAssertEqual(config.backgroundBlur, .macosGlassClear)
     }
 
     func testLoadThemeResolvesBuiltinAliasFromGhosttyResourcesDir() throws {
@@ -674,7 +727,10 @@ final class WorkspaceChromeThemeTests: XCTestCase {
 
         let colors = Workspace.resolvedChromeColors(from: backgroundColor)
         XCTAssertEqual(colors.backgroundHex, "#FDF6E3")
-        XCTAssertNil(colors.borderHex)
+        XCTAssertEqual(colors.tabBarBackgroundHex, "#FDF6E3")
+        XCTAssertEqual(colors.splitButtonBackdropHex, "#FDF6E3")
+        XCTAssertEqual(colors.paneBackgroundHex, "#00000000")
+        XCTAssertEqual(colors.borderHex, "#DED7C442")
     }
 
     func testResolvedChromeColorsUsesDarkGhosttyBackground() {
@@ -685,7 +741,86 @@ final class WorkspaceChromeThemeTests: XCTestCase {
 
         let colors = Workspace.resolvedChromeColors(from: backgroundColor)
         XCTAssertEqual(colors.backgroundHex, "#272822")
-        XCTAssertNil(colors.borderHex)
+        XCTAssertEqual(colors.tabBarBackgroundHex, "#272822")
+        XCTAssertEqual(colors.splitButtonBackdropHex, "#272822")
+        XCTAssertEqual(colors.paneBackgroundHex, "#00000000")
+        XCTAssertEqual(colors.borderHex, "#4F504A5B")
+    }
+
+    func testResolvedChromeColorsKeepSemanticBackgroundButClearLocalBackdropsWhenSharingWindowBackdrop() {
+        guard let backgroundColor = NSColor(hex: "#272822") else {
+            XCTFail("Expected valid test color")
+            return
+        }
+
+        let colors = Workspace.resolvedChromeColors(
+            from: backgroundColor,
+            sharesWindowBackdrop: true
+        )
+        XCTAssertEqual(colors.backgroundHex, "#272822")
+        XCTAssertEqual(colors.tabBarBackgroundHex, "#00000000")
+        XCTAssertEqual(colors.splitButtonBackdropHex, "#00000000")
+        XCTAssertEqual(colors.paneBackgroundHex, "#00000000")
+        XCTAssertEqual(colors.borderHex, "#4F504A5B")
+    }
+
+    func testResolvedChromeColorsKeepPaneClearForRendererOwnedBackgrounds() {
+        guard let backgroundColor = NSColor(hex: "#272822") else {
+            XCTFail("Expected valid test color")
+            return
+        }
+
+        let colors = Workspace.resolvedChromeColors(
+            from: backgroundColor,
+            renderingMode: .ghosttyRendererOwnedBackgroundImage
+        )
+        XCTAssertEqual(colors.backgroundHex, "#272822")
+        XCTAssertEqual(colors.tabBarBackgroundHex, "#272822")
+        XCTAssertEqual(colors.splitButtonBackdropHex, "#272822")
+        XCTAssertEqual(colors.paneBackgroundHex, "#00000000")
+        XCTAssertEqual(colors.borderHex, "#4F504A5B")
+    }
+}
+
+final class WindowChromeSeparatorColorTests: XCTestCase {
+    func testDarkChromeSeparatorMatchesBonsplitDerivation() {
+        guard let backgroundColor = NSColor(hex: "#272822") else {
+            XCTFail("Expected valid test color")
+            return
+        }
+
+        let color = WindowChromeSeparatorColor.color(forChromeBackground: backgroundColor)
+        let rgba = rgbaComponents(color)
+
+        XCTAssertEqual(rgba.red, CGFloat(39.0 / 255.0) + CGFloat(0.16), accuracy: 0.0001)
+        XCTAssertEqual(rgba.green, CGFloat(40.0 / 255.0) + CGFloat(0.16), accuracy: 0.0001)
+        XCTAssertEqual(rgba.blue, CGFloat(34.0 / 255.0) + CGFloat(0.16), accuracy: 0.0001)
+        XCTAssertEqual(rgba.alpha, CGFloat(0.36), accuracy: 0.0001)
+    }
+
+    func testLightChromeSeparatorMatchesBonsplitDerivation() {
+        guard let backgroundColor = NSColor(hex: "#FDF6E3") else {
+            XCTFail("Expected valid test color")
+            return
+        }
+
+        let color = WindowChromeSeparatorColor.color(forChromeBackground: backgroundColor)
+        let rgba = rgbaComponents(color)
+
+        XCTAssertEqual(rgba.red, CGFloat(253.0 / 255.0) - CGFloat(0.12), accuracy: 0.0001)
+        XCTAssertEqual(rgba.green, CGFloat(246.0 / 255.0) - CGFloat(0.12), accuracy: 0.0001)
+        XCTAssertEqual(rgba.blue, CGFloat(227.0 / 255.0) - CGFloat(0.12), accuracy: 0.0001)
+        XCTAssertEqual(rgba.alpha, CGFloat(0.26), accuracy: 0.0001)
+    }
+
+    private func rgbaComponents(_ color: NSColor) -> (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
+        let srgb = color.usingColorSpace(.sRGB) ?? color
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        srgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return (red, green, blue, alpha)
     }
 }
 
@@ -759,6 +894,63 @@ final class WorkspaceChromeColorTests: XCTestCase {
         let hex = Workspace.bonsplitChromeHex(backgroundColor: color, backgroundOpacity: 1.0)
         XCTAssertEqual(hex, "#112233")
     }
+
+    func testBonsplitChromeHexKeepsBackdropWhenSharingWindowBackdrop() {
+        let color = NSColor(
+            srgbRed: 17.0 / 255.0,
+            green: 34.0 / 255.0,
+            blue: 51.0 / 255.0,
+            alpha: 1.0
+        )
+
+        let hex = Workspace.bonsplitChromeHex(
+            backgroundColor: color,
+            backgroundOpacity: 0.5,
+            sharesWindowBackdrop: true
+        )
+        XCTAssertEqual(hex, "#1122337F")
+    }
+
+    func testBonsplitChromeColorsKeepPaneClearWhenTerminalUsesHostLayerBackground() {
+        let color = NSColor(
+            srgbRed: 17.0 / 255.0,
+            green: 34.0 / 255.0,
+            blue: 51.0 / 255.0,
+            alpha: 1.0
+        )
+
+        let colors = Workspace.bonsplitChromeColors(
+            backgroundColor: color,
+            backgroundOpacity: 0.5,
+            renderingMode: .windowHostBackdrop
+        )
+
+        XCTAssertEqual(colors.backgroundHex, "#1122337F")
+        XCTAssertEqual(colors.tabBarBackgroundHex, "#1122337F")
+        XCTAssertEqual(colors.splitButtonBackdropHex, "#1122337F")
+        XCTAssertEqual(colors.paneBackgroundHex, "#00000000")
+    }
+
+    func testBonsplitChromeColorsKeepSemanticBackgroundButClearLocalBackdropsWhenSharingWindowBackdrop() {
+        let color = NSColor(
+            srgbRed: 17.0 / 255.0,
+            green: 34.0 / 255.0,
+            blue: 51.0 / 255.0,
+            alpha: 1.0
+        )
+
+        let colors = Workspace.bonsplitChromeColors(
+            backgroundColor: color,
+            backgroundOpacity: 0.5,
+            sharesWindowBackdrop: true,
+            renderingMode: .windowHostBackdrop
+        )
+
+        XCTAssertEqual(colors.backgroundHex, "#1122337F")
+        XCTAssertEqual(colors.tabBarBackgroundHex, "#00000000")
+        XCTAssertEqual(colors.splitButtonBackdropHex, "#00000000")
+        XCTAssertEqual(colors.paneBackgroundHex, "#00000000")
+    }
 }
 
 final class WindowTransparencyDecisionTests: XCTestCase {
@@ -816,6 +1008,17 @@ final class WindowTransparencyDecisionTests: XCTestCase {
 
             XCTAssertTrue(cmuxShouldUseTransparentBackgroundWindow())
             XCTAssertTrue(cmuxShouldUseClearWindowBackground(for: 1.0))
+        }
+    }
+
+    func testGhosttyGlassStyleForcesClearWindowBackgroundAtOpaqueOpacity() {
+        withTemporaryWindowBackgroundDefaults {
+            let defaults = UserDefaults.standard
+            defaults.set("withinWindow", forKey: sidebarBlendModeKey)
+            defaults.set(false, forKey: bgGlassEnabledKey)
+
+            XCTAssertFalse(cmuxShouldUseTransparentBackgroundWindow())
+            XCTAssertTrue(cmuxShouldUseClearWindowBackground(for: 1.0, usesGhosttyGlassStyle: true))
         }
     }
 
@@ -1161,6 +1364,41 @@ final class BrowserPanelPopupContextTests: XCTestCase {
             popupWebView.configuration.websiteDataStore === panel.webView.configuration.websiteDataStore
         )
         XCTAssertFalse(popupWebView.configuration.websiteDataStore === WKWebsiteDataStore.default())
+    }
+}
+
+final class BrowserNewTabNavigationSeedTests: XCTestCase {
+    func testPreservesOriginalRequestHeadersMethodBodyAndBypassHost() throws {
+        let url = try XCTUnwrap(URL(string: "https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fexample.com"))
+        let body = Data("payload=1".utf8)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("https://www.linkedin.com/feed/", forHTTPHeaderField: "Referer")
+        request.setValue("keep-me", forHTTPHeaderField: "X-Cmux-Test")
+
+        let seed = try XCTUnwrap(
+            browserNewTabNavigationSeed(
+                from: request,
+                bypassInsecureHTTPHostOnce: "www.linkedin.com"
+            )
+        )
+
+        // This covers the pure seeding helper only. WebKit may still rewrite
+        // programmatic loads when the request is replayed in the destination tab.
+        XCTAssertEqual(seed.url, url)
+        XCTAssertEqual(seed.bypassInsecureHTTPHostOnce, "www.linkedin.com")
+        XCTAssertEqual(seed.initialRequest.httpMethod, "POST")
+        XCTAssertEqual(seed.initialRequest.httpBody, body)
+        XCTAssertEqual(
+            seed.initialRequest.value(forHTTPHeaderField: "Referer"),
+            "https://www.linkedin.com/feed/"
+        )
+        XCTAssertEqual(
+            seed.initialRequest.value(forHTTPHeaderField: "X-Cmux-Test"),
+            "keep-me"
+        )
+        XCTAssertEqual(seed.initialRequest.cachePolicy, .reloadIgnoringLocalCacheData)
     }
 }
 
@@ -2295,6 +2533,38 @@ final class GhosttyMouseFocusTests: XCTestCase {
         XCTAssertFalse(hiraginoRanges.contains("U+AC00-U+D7AF"), "Hangul NOT in Hiragino")
     }
 
+    func testResolvedInjectedCJKFontNamePinsRegularWeightForHiraginoSans() throws {
+        guard let plain = GhosttyApp.discoveredCTFont(named: "Hiragino Sans"),
+              let pinned = GhosttyApp.discoveredCTFont(
+                  named: GhosttyApp.resolvedInjectedCJKFontName(named: "Hiragino Sans")
+              ) else {
+            throw XCTSkip("Hiragino Sans is unavailable on this runner")
+        }
+
+        let plainFullName = CTFontCopyFullName(plain) as String
+        let pinnedFullName = CTFontCopyFullName(pinned) as String
+
+        XCTAssertEqual(CTFontCopyFamilyName(pinned) as String, "Hiragino Sans")
+        XCTAssertFalse(pinnedFullName.contains(" W0"))
+        if plainFullName.contains(" W0") {
+            XCTAssertNotEqual(
+                CTFontCopyPostScriptName(plain) as String,
+                CTFontCopyPostScriptName(pinned) as String
+            )
+        }
+    }
+
+    func testResolvedInjectedCJKFontNameLeavesPingFangSCStable() throws {
+        guard GhosttyApp.discoveredCTFont(named: "PingFang SC") != nil else {
+            throw XCTSkip("PingFang SC is unavailable on this runner")
+        }
+
+        XCTAssertEqual(
+            GhosttyApp.resolvedInjectedCJKFontName(named: "PingFang SC"),
+            "PingFang SC"
+        )
+    }
+
     // MARK: autoInjectedCJKFontMappings
 
     func testAutoInjectedCJKFontMappingsSkipsRangesCoveredByConfiguredPrimaryFont() throws {
@@ -2614,7 +2884,7 @@ final class GhosttyMouseFocusTests: XCTestCase {
         }
     }
 
-    func testLoadedCJKScanPathsSkipsReleaseAppSupportWhenTaggedConfigExists() throws {
+    func testLoadedCJKScanPathsIncludesNativeGhosttyAppSupportWhenTaggedConfigExists() throws {
         let appSupport = FileManager.default.temporaryDirectory
             .appendingPathComponent("cmux-test-cjk-app-support-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
@@ -2629,6 +2899,7 @@ final class GhosttyMouseFocusTests: XCTestCase {
         let releaseDir = appSupport.appendingPathComponent("com.mitchellh.ghostty", isDirectory: true)
         try FileManager.default.createDirectory(at: releaseDir, withIntermediateDirectories: true)
         let releaseConfig = releaseDir.appendingPathComponent("config", isDirectory: false)
+        let releaseConfigGhostty = releaseDir.appendingPathComponent("config.ghostty", isDirectory: false)
         try "font-family = LXGW WenKai Mono TC\n"
             .write(to: releaseConfig, atomically: true, encoding: .utf8)
 
@@ -2638,13 +2909,144 @@ final class GhosttyMouseFocusTests: XCTestCase {
         )
 
         XCTAssertTrue(paths.contains(taggedConfig.path))
-        XCTAssertFalse(paths.contains(releaseConfig.path))
-        XCTAssertTrue(
+        XCTAssertTrue(paths.contains(releaseConfig.path))
+        XCTAssertTrue(paths.contains(releaseConfigGhostty.path))
+        XCTAssertFalse(
             GhosttyApp.shouldInjectCJKFontFallback(
                 preferredLanguages: ["zh-Hans-CN"],
                 configPaths: paths
             )
         )
+    }
+
+    func testShouldApplyManagedDefaultAppearanceScansNativeGhosttyAppSupport() throws {
+        let appSupport = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-test-appearance-app-support-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: appSupport) }
+
+        let ghosttyDir = appSupport.appendingPathComponent("com.mitchellh.ghostty", isDirectory: true)
+        try FileManager.default.createDirectory(at: ghosttyDir, withIntermediateDirectories: true)
+        let nativeConfig = ghosttyDir.appendingPathComponent("config", isDirectory: false)
+        try "theme = Dracula\n"
+            .write(to: nativeConfig, atomically: true, encoding: .utf8)
+
+        let paths = GhosttyApp.loadedGhosttyConfigScanPaths(
+            currentBundleIdentifier: "com.example.cmux-dev",
+            appSupportDirectory: appSupport
+        )
+
+        XCTAssertTrue(paths.contains(nativeConfig.path))
+        XCTAssertFalse(GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: paths))
+    }
+
+    // MARK: shouldApplyManagedDefaultAppearance
+
+    func testShouldApplyManagedDefaultAppearanceAllowsNonAppearanceConfig() throws {
+        try withTempConfig("""
+        font-family = JetBrains Mono
+        background-opacity = 0.92
+        """) { path in
+            XCTAssertTrue(
+                GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: [path])
+            )
+        }
+    }
+
+    func testShouldApplyManagedDefaultAppearanceSkipsExplicitTheme() throws {
+        try withTempConfig("theme = Catppuccin Mocha\n") { path in
+            XCTAssertFalse(
+                GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: [path])
+            )
+        }
+    }
+
+    func testShouldApplyManagedDefaultAppearanceSkipsExplicitTerminalColorDirective() throws {
+        try withTempConfig("background = #101010\n") { path in
+            XCTAssertFalse(
+                GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: [path])
+            )
+        }
+    }
+
+    func testShouldApplyManagedDefaultAppearanceFollowsConfigFileIncludes() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-test-theme-include-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let included = dir.appendingPathComponent("appearance.conf")
+        try "theme = Catppuccin Latte\n"
+            .write(to: included, atomically: true, encoding: .utf8)
+
+        let main = dir.appendingPathComponent("config")
+        try "font-family = JetBrains Mono\nconfig-file = \(included.path)\n"
+            .write(to: main, atomically: true, encoding: .utf8)
+
+        XCTAssertFalse(
+            GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: [main.path])
+        )
+    }
+
+    func testShouldApplyManagedDefaultAppearancePreservesQuotedQuestionMarkConfigFile() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-test-theme-quoted-include-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let included = dir.appendingPathComponent("?appearance.conf")
+        try "theme = Catppuccin Latte\n"
+            .write(to: included, atomically: true, encoding: .utf8)
+
+        let main = dir.appendingPathComponent("config")
+        try "config-file = \"?appearance.conf\"\n"
+            .write(to: main, atomically: true, encoding: .utf8)
+
+        XCTAssertFalse(
+            GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: [main.path])
+        )
+    }
+
+    func testShouldApplyManagedDefaultAppearanceProcessesIncludeQueuedAfterReset() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-test-theme-reset-include-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let themed = dir.appendingPathComponent("appearance.conf")
+        try "theme = Catppuccin Latte\n"
+            .write(to: themed, atomically: true, encoding: .utf8)
+
+        let first = dir.appendingPathComponent("first.conf")
+        try """
+        config-file =
+        config-file = appearance.conf
+        """
+        .write(to: first, atomically: true, encoding: .utf8)
+
+        let main = dir.appendingPathComponent("config")
+        try "config-file = first.conf\n"
+            .write(to: main, atomically: true, encoding: .utf8)
+
+        XCTAssertFalse(
+            GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: [main.path])
+        )
+    }
+
+    func testStartupAppearanceFreshInstallPreviewUsesManagedDefaultColorsWithoutSettingTheme() {
+        #if DEBUG
+        let previousProfile = GhosttyStartupAppearancePreviewState.profile
+        GhosttyStartupAppearancePreviewState.profile = .freshInstall
+        GhosttyConfig.invalidateLoadCache()
+        defer {
+            GhosttyStartupAppearancePreviewState.profile = previousProfile
+            GhosttyConfig.invalidateLoadCache()
+        }
+
+        let config = GhosttyConfig.load(preferredColorScheme: .light, useCache: false)
+        XCTAssertNil(config.theme)
+        XCTAssertEqual(config.backgroundColor.hexString(), "#FEFFFF")
+        #endif
     }
 }
 

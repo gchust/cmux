@@ -62,6 +62,11 @@
           "default": "automatic",
           "description": "Dock and app switcher icon style."
         },
+        "menuBarOnly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Hide the Dock icon and app switcher entry while keeping cmux available from the menu bar."
+        },
         "newWorkspacePlacement": {
           "type": "string",
           "enum": ["top", "afterCurrent", "end"],
@@ -97,6 +102,11 @@
           "type": "boolean",
           "default": true,
           "description": "Move workspaces with new notifications toward the top."
+        },
+        "iMessageMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Move a workspace to the top and show the submitted message when sending an agent prompt."
         },
         "sendAnonymousTelemetry": {
           "type": "boolean",
@@ -416,22 +426,6 @@
         }
       }
     },
-    "customCommands": {
-      "title": "customCommands",
-      "description": "Custom command trust settings from Settings > Custom Commands.",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "trustedDirectories": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Directories whose cmux.json commands can run without confirmation."
-        }
-      }
-    },
     "browser": {
       "title": "browser",
       "description": "Embedded browser settings from Settings > Browser.",
@@ -521,7 +515,7 @@
         "bindings": {
           "type": "object",
           "default": {},
-          "description": "Shortcut overrides keyed by cmux action id. Use a string for a single shortcut or an array for a chord.",
+          "description": "Shortcut overrides keyed by cmux action id. Use a string for a single shortcut, an array for a chord, or an empty string to unbind.",
           "propertyNames": {
             "enum": [
               "openSettings",
@@ -534,11 +528,18 @@
               "toggleSidebar",
               "newTab",
               "openFolder",
+              "reopenPreviousSession",
               "goToWorkspace",
               "commandPalette",
               "sendFeedback",
               "showNotifications",
               "jumpToUnread",
+              "focusRightSidebar",
+              "switchRightSidebarToFiles",
+              "switchRightSidebarToFind",
+              "switchRightSidebarToSessions",
+              "switchRightSidebarToFeed",
+              "switchRightSidebarToDock",
               "triggerFlash",
               "nextSurface",
               "prevSurface",
@@ -548,6 +549,7 @@
               "selectWorkspaceByNumber",
               "renameTab",
               "renameWorkspace",
+              "editWorkspaceDescription",
               "closeTab",
               "closeOtherTabsInPane",
               "closeWorkspace",
@@ -563,6 +565,7 @@
               "toggleSplitZoom",
               "splitBrowserRight",
               "splitBrowserDown",
+              "saveFilePreview",
               "openBrowser",
               "focusBrowserAddressBar",
               "browserBack",
@@ -572,6 +575,7 @@
               "browserZoomOut",
               "browserZoomReset",
               "find",
+              "findInDirectory",
               "findNext",
               "findPrevious",
               "hideFind",
@@ -608,7 +612,7 @@
       "oneOf": [
         {
           "type": "string",
-          "description": "Single-stroke shortcut, for example cmd+n."
+          "description": "Single-stroke shortcut, for example cmd+n. Use an empty string, none, clear, or unbound to unbind."
         },
         {
           "type": "array",

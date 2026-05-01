@@ -422,6 +422,9 @@ enum FileExplorerError: LocalizedError {
 // MARK: - State (visibility toggle)
 
 final class FileExplorerState: ObservableObject {
+    private static let modeKey = "rightSidebar.mode"
+    private static let feedDockMigrationKey = "rightSidebar.feedDockMigrationApplied"
+
     @Published var isVisible: Bool {
         didSet { UserDefaults.standard.set(isVisible, forKey: "fileExplorer.isVisible") }
     }
@@ -442,7 +445,7 @@ final class FileExplorerState: ObservableObject {
 
     /// Active mode for the right sidebar (file tree or session index).
     @Published var mode: RightSidebarMode {
-        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "rightSidebar.mode") }
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey) }
     }
 
     init() {
@@ -454,8 +457,15 @@ final class FileExplorerState: ObservableObject {
         self.dividerPosition = storedPosition > 0 ? CGFloat(storedPosition) : 0.6
         let storedShowHidden = defaults.object(forKey: "fileExplorer.showHidden")
         self.showHiddenFiles = storedShowHidden == nil ? true : defaults.bool(forKey: "fileExplorer.showHidden")
-        let storedMode = defaults.string(forKey: "rightSidebar.mode") ?? RightSidebarMode.files.rawValue
-        self.mode = RightSidebarMode(rawValue: storedMode) ?? .files
+        let storedMode = defaults.string(forKey: Self.modeKey) ?? RightSidebarMode.files.rawValue
+        if storedMode == RightSidebarMode.feed.rawValue,
+           defaults.bool(forKey: Self.feedDockMigrationKey) == false {
+            self.mode = .dock
+            defaults.set(RightSidebarMode.dock.rawValue, forKey: Self.modeKey)
+            defaults.set(true, forKey: Self.feedDockMigrationKey)
+        } else {
+            self.mode = RightSidebarMode(rawValue: storedMode) ?? .files
+        }
     }
 
     func toggle() {
@@ -495,6 +505,7 @@ final class FileExplorerStore: ObservableObject {
     @Published var rootNodes: [FileExplorerNode] = []
     @Published private(set) var isRootLoading: Bool = false
     @Published private(set) var gitStatusByPath: [String: GitFileStatus] = [:]
+    @Published private(set) var contentRevision = 0
 
     var provider: FileExplorerProvider?
 
@@ -506,6 +517,12 @@ final class FileExplorerStore: ObservableObject {
 
     /// Paths that are logically expanded (persisted across provider changes)
     private(set) var expandedPaths: Set<String> = []
+
+    /// Stable navigation selection. The outline view mirrors this path after reloads.
+    private(set) var selectedPath: String?
+
+    /// Folder path whose first child should be selected once its async load completes.
+    private var pendingDescendIntoFirstChildPath: String?
 
     /// Paths currently being loaded
     private(set) var loadingPaths: Set<String> = []
@@ -535,6 +552,10 @@ final class FileExplorerStore: ObservableObject {
         #if DEBUG
         NSLog("[FileExplorer] setRootPath: \(rootPath) -> \(path)")
         #endif
+        if let selectedPath, !Self.path(selectedPath, isContainedIn: path) {
+            self.selectedPath = nil
+            pendingDescendIntoFirstChildPath = nil
+        }
         rootPath = path
         reload()
         refreshGitStatus()
@@ -600,6 +621,7 @@ final class FileExplorerStore: ObservableObject {
         #if DEBUG
         NSLog("[FileExplorer] reload() path=\(rootPath) provider=\(type(of: provider).self)")
         #endif
+        contentRevision &+= 1
         cancelAllLoads()
         rootNodes = []
         nodesByPath = [:]
@@ -616,7 +638,7 @@ final class FileExplorerStore: ObservableObject {
     func expand(node: FileExplorerNode) {
         guard node.isDirectory else { return }
         expandedPaths.insert(node.path)
-        if node.children == nil {
+        if node.children == nil, loadTasks[node.path] == nil, !loadingPaths.contains(node.path) {
             node.isLoading = true
             node.error = nil
             objectWillChange.send()
@@ -631,11 +653,30 @@ final class FileExplorerStore: ObservableObject {
 
     func collapse(node: FileExplorerNode) {
         expandedPaths.remove(node.path)
+        if pendingDescendIntoFirstChildPath == node.path {
+            pendingDescendIntoFirstChildPath = nil
+        }
         objectWillChange.send()
     }
 
     func isExpanded(_ node: FileExplorerNode) -> Bool {
         expandedPaths.contains(node.path)
+    }
+
+    func select(node: FileExplorerNode?) {
+        let path = node?.path
+        guard selectedPath != path else { return }
+        selectedPath = path
+        if path != pendingDescendIntoFirstChildPath {
+            pendingDescendIntoFirstChildPath = nil
+        }
+    }
+
+    func requestDescendIntoFirstChild(of node: FileExplorerNode) {
+        guard node.isDirectory else { return }
+        selectedPath = node.path
+        pendingDescendIntoFirstChildPath = node.path
+        expand(node: node)
     }
 
     func prefetchChildren(for node: FileExplorerNode) {
@@ -696,9 +737,16 @@ final class FileExplorerStore: ObservableObject {
                 parentNode.children = children
                 parentNode.isLoading = false
                 parentNode.error = nil
+                if pendingDescendIntoFirstChildPath == parentNode.path {
+                    selectedPath = children.first?.path ?? parentNode.path
+                    pendingDescendIntoFirstChildPath = nil
+                }
             } else {
                 rootNodes = children
                 isRootLoading = false
+                if selectedPath == nil {
+                    selectedPath = children.first?.path
+                }
             }
             loadingPaths.remove(path)
             loadTasks.removeValue(forKey: path)
@@ -736,11 +784,20 @@ final class FileExplorerStore: ObservableObject {
         }
         loadTasks.removeAll()
         loadingPaths.removeAll()
+        pendingDescendIntoFirstChildPath = nil
         for (_, item) in prefetchWorkItems {
             item.cancel()
         }
         prefetchWorkItems.removeAll()
         isRootLoading = false
+    }
+
+    private static func path(_ candidate: String, isContainedIn root: String) -> Bool {
+        guard !root.isEmpty else { return false }
+        if root == "/" {
+            return candidate.hasPrefix("/")
+        }
+        return candidate == root || candidate.hasPrefix(root + "/")
     }
 }
 

@@ -7,6 +7,10 @@ struct GhosttyConfig {
         case dark
     }
 
+    // Native fallback for fresh installs when the user hasn't chosen terminal colors yet.
+    static let cmuxDefaultLightThemeName = "Apple System Colors Light"
+    static let cmuxDefaultDarkThemeName = "Apple System Colors"
+
     private static let cmuxReleaseBundleIdentifier = "com.cmuxterm.app"
     private static let loadCacheLock = NSLock()
     private static var cachedConfigsByColorScheme: [ColorSchemePreference: GhosttyConfig] = [:]
@@ -25,6 +29,7 @@ struct GhosttyConfig {
     // Colors (from theme or config)
     var backgroundColor: NSColor = NSColor(hex: "#272822")!
     var backgroundOpacity: Double = 1.0
+    var backgroundBlur: GhosttyBackgroundBlur = .disabled
     var foregroundColor: NSColor = NSColor(hex: "#fdfff1")!
     var cursorColor: NSColor = NSColor(hex: "#c0c1b5")!
     var cursorTextColor: NSColor = NSColor(hex: "#8d8e82")!
@@ -202,11 +207,44 @@ struct GhosttyConfig {
             "~/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
         ].map { NSString(string: $0).expandingTildeInPath } + cmuxConfigPaths()
 
+        #if DEBUG
+        let startupPreviewProfile = GhosttyStartupAppearancePreviewState.profile
+        if startupPreviewProfile.loadsRealUserConfig {
+            for path in configPaths {
+                if let contents = readConfigFile(at: path) {
+                    config.parse(contents)
+                }
+            }
+
+            if config.theme == nil,
+               GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: configPaths) {
+                config.applyCmuxDefaultAppearance(
+                    environment: ProcessInfo.processInfo.environment,
+                    bundleResourceURL: Bundle.main.resourceURL,
+                    preferredColorScheme: preferredColorScheme
+                )
+            }
+        } else if let contents = startupPreviewProfile.previewConfigContents(
+            preferredColorScheme: preferredColorScheme
+        ) {
+            config.parse(contents)
+        }
+        #else
         for path in configPaths {
             if let contents = readConfigFile(at: path) {
                 config.parse(contents)
             }
         }
+
+        if config.theme == nil,
+           GhosttyApp.shouldApplyManagedDefaultAppearance(configPaths: configPaths) {
+            config.applyCmuxDefaultAppearance(
+                environment: ProcessInfo.processInfo.environment,
+                bundleResourceURL: Bundle.main.resourceURL,
+                preferredColorScheme: preferredColorScheme
+            )
+        }
+        #endif
 
         // Load theme if specified
         if let themeName = config.theme {
@@ -222,6 +260,121 @@ struct GhosttyConfig {
         config.applySidebarAppearanceToUserDefaults()
 
         return config
+    }
+
+    mutating func applyCmuxDefaultAppearance(
+        environment: [String: String],
+        bundleResourceURL: URL?,
+        preferredColorScheme: ColorSchemePreference
+    ) {
+        parse(
+            Self.cmuxDefaultThemeConfigContents(
+                preferredColorScheme: preferredColorScheme,
+                environment: environment,
+                bundleResourceURL: bundleResourceURL
+            )
+        )
+    }
+
+    static func cmuxDefaultThemeName(preferredColorScheme: ColorSchemePreference) -> String {
+        switch preferredColorScheme {
+        case .light:
+            return cmuxDefaultLightThemeName
+        case .dark:
+            return cmuxDefaultDarkThemeName
+        }
+    }
+
+    static func cmuxDefaultThemeConfigContents(
+        preferredColorScheme: ColorSchemePreference,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundleResourceURL: URL? = Bundle.main.resourceURL
+    ) -> String {
+        if let url = cmuxDefaultThemeConfigURL(
+            preferredColorScheme: preferredColorScheme,
+            environment: environment,
+            bundleResourceURL: bundleResourceURL
+        ), let contents = try? String(contentsOf: url, encoding: .utf8) {
+            return contents
+        }
+
+        return cmuxDefaultFallbackConfigContents(preferredColorScheme: preferredColorScheme)
+    }
+
+    static func cmuxDefaultThemeConfigURL(
+        preferredColorScheme: ColorSchemePreference,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundleResourceURL: URL? = Bundle.main.resourceURL
+    ) -> URL? {
+        let themeName = cmuxDefaultThemeName(preferredColorScheme: preferredColorScheme)
+        for candidateName in themeNameCandidates(from: themeName) {
+            for path in themeSearchPaths(
+                forThemeName: candidateName,
+                environment: environment,
+                bundleResourceURL: bundleResourceURL
+            ) where (try? String(contentsOfFile: path, encoding: .utf8)) != nil {
+                return URL(fileURLWithPath: path)
+            }
+        }
+
+        return nil
+    }
+
+    private static func cmuxDefaultFallbackConfigContents(
+        preferredColorScheme: ColorSchemePreference
+    ) -> String {
+        switch preferredColorScheme {
+        case .light:
+            return """
+            palette = 0=#1a1a1a
+            palette = 1=#cc372e
+            palette = 2=#26a439
+            palette = 3=#cdac08
+            palette = 4=#0869cb
+            palette = 5=#9647bf
+            palette = 6=#479ec2
+            palette = 7=#98989d
+            palette = 8=#464646
+            palette = 9=#ff453a
+            palette = 10=#32d74b
+            palette = 11=#e5bc00
+            palette = 12=#0a84ff
+            palette = 13=#bf5af2
+            palette = 14=#69c9f2
+            palette = 15=#ffffff
+            background = #feffff
+            foreground = #000000
+            cursor-color = #98989d
+            cursor-text = #ffffff
+            selection-background = #abd8ff
+            selection-foreground = #000000
+            """
+        case .dark:
+            return """
+            palette = 0=#1a1a1a
+            palette = 1=#cc372e
+            palette = 2=#26a439
+            palette = 3=#cdac08
+            palette = 4=#0869cb
+            palette = 5=#9647bf
+            palette = 6=#479ec2
+            palette = 7=#98989d
+            palette = 8=#464646
+            palette = 9=#ff453a
+            palette = 10=#32d74b
+            palette = 11=#ffd60a
+            palette = 12=#0a84ff
+            palette = 13=#bf5af2
+            palette = 14=#76d6ff
+            palette = 15=#ffffff
+            background = #1e1e1e
+            foreground = #ffffff
+            cursor-color = #98989d
+            cursor-text = #ffffff
+            selection-background = #3f638b
+            selection-foreground = #ffffff
+            """
+        }
     }
 
     mutating func parse(_ contents: String) {
@@ -263,6 +416,10 @@ struct GhosttyConfig {
                 case "background-opacity":
                     if let opacity = Double(value) {
                         backgroundOpacity = opacity
+                    }
+                case "background-blur":
+                    if let parsedBlur = Self.parseBackgroundBlur(value) {
+                        backgroundBlur = parsedBlur
                     }
                 case "foreground":
                     if let color = NSColor(hex: value) {
@@ -325,6 +482,24 @@ struct GhosttyConfig {
             return nil
         }
         return parsed
+    }
+
+    private static func parseBackgroundBlur(_ value: String) -> GhosttyBackgroundBlur? {
+        switch value {
+        case "false", "0":
+            return .disabled
+        case "true":
+            return .radius(20)
+        case "macos-glass-regular":
+            return .macosGlassRegular
+        case "macos-glass-clear":
+            return .macosGlassClear
+        default:
+            guard let radius = parseIntegerLiteral(value), radius > 0, radius <= Int(UInt8.max) else {
+                return nil
+            }
+            return .radius(radius)
+        }
     }
 
     mutating func loadTheme(_ name: String) {
