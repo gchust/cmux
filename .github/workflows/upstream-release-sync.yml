@@ -19,13 +19,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
     steps:
       - name: Checkout custom branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: custom/main
           fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
 
       - name: Configure git identity
         run: |
