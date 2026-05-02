@@ -8420,7 +8420,7 @@ struct CMUXCLI {
             Usage: cmux disable-browser [--json]
 
             Disable cmux browser creation and link interception. This overrides
-            browser settings from settings.json until re-enabled.
+            browser settings from cmux.json until re-enabled.
             """
         case "enable-browser":
             return """
@@ -9094,7 +9094,7 @@ struct CMUXCLI {
             Usage: cmux reload-config
 
             Run the same configuration reload as the Reload Configuration shortcut.
-            This reloads Ghostty config, re-reads ~/.config/cmux/settings.json, and refreshes terminals.
+            This reloads Ghostty config, re-reads ~/.config/cmux/cmux.json, and refreshes terminals.
 
             Example:
               cmux reload-config
@@ -16282,7 +16282,7 @@ struct CMUXCLI {
                 .init(agentEvent: "UserPromptSubmit", cmuxSubcommand: "prompt-submit"),
                 .init(agentEvent: "Stop", cmuxSubcommand: "stop"),
             ],
-            feedHookEvents: ["PreToolUse"],
+            feedHookEvents: ["PreToolUse", "PermissionRequest"],
             postInstallAction: .codexConfigToml
         ),
         AgentHookDef(
@@ -18657,6 +18657,9 @@ export default CMUXSessionRestore;
         guard item.canResolve else { return "Resolved or informational item" }
         switch item.kind {
         case "permissionRequest":
+            if item.source == "codex" {
+                return "Permission: Enter/o once, d deny"
+            }
             return "Permission: Enter/o once, a always, l all tools, b bypass, d deny"
         case "exitPlan":
             return "Plan: Enter default, a auto, m manual, u ultraplan, b bypass, f replan, d deny"
@@ -18696,11 +18699,11 @@ export default CMUXSessionRestore;
             switch key {
             case .enter, .once:
                 mode = "once"
-            case .always:
+            case .always where item.source != "codex":
                 mode = "always"
-            case .all:
+            case .all where item.source != "codex":
                 mode = "all"
-            case .bypass:
+            case .bypass where item.source != "codex":
                 mode = "bypass"
             case .deny:
                 mode = "deny"
@@ -19393,6 +19396,7 @@ export default CMUXSessionRestore;
 
         switch event {
         case "PreToolUse", "beforeShellExecution":
+            if source == "codex" { return ("PreToolUse", false) }
             switch toolName {
             case "ExitPlanMode":
                 return ("ExitPlanMode", true)
@@ -19466,7 +19470,7 @@ export default CMUXSessionRestore;
             return s
         }
 
-        func claudePermissionRequestDecision(
+        func permissionRequestHookDecision(
             behavior: String,
             message: String? = nil,
             updatedInput: [String: Any]? = nil,
@@ -19534,7 +19538,7 @@ export default CMUXSessionRestore;
             let mode = decision["mode"] as? String ?? "deny"
             if source == "claude" {
                 if mode == "deny" {
-                    return encode(claudePermissionRequestDecision(
+                    return encode(permissionRequestHookDecision(
                         behavior: "deny",
                         message: "User denied permission via cmux Feed."
                     ))
@@ -19549,23 +19553,19 @@ export default CMUXSessionRestore;
                         "destination": "session",
                     ]]
                 }
-                return encode(claudePermissionRequestDecision(
+                return encode(permissionRequestHookDecision(
                     behavior: "allow",
                     updatedPermissions: updatedPermissions
                 ))
             }
             if source == "codex" {
                 if mode == "deny" {
-                    return encode([
-                        "decision": "block",
-                        "reason": "User denied permission via cmux Feed."
-                    ])
+                    return encode(permissionRequestHookDecision(
+                        behavior: "deny",
+                        message: "User denied permission via cmux Feed."
+                    ))
                 }
-                var out: [String: Any] = ["decision": "approve"]
-                if mode == "always" || mode == "all" || mode == "bypass" {
-                    out["remember"] = (mode == "bypass") ? "always" : "session"
-                }
-                return encode(out)
+                return encode(permissionRequestHookDecision(behavior: "allow"))
             }
             if mode == "deny" {
                 return encode(nonClaudePreToolDecision(
@@ -19588,19 +19588,19 @@ export default CMUXSessionRestore;
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if source == "claude" {
                 if let feedback, !feedback.isEmpty {
-                    return encode(claudePermissionRequestDecision(
+                    return encode(permissionRequestHookDecision(
                         behavior: "deny",
                         message: "User rejected the plan via cmux Feed and wants this change: \(feedback)"
                     ))
                 }
                 if mode == "deny" {
-                    return encode(claudePermissionRequestDecision(
+                    return encode(permissionRequestHookDecision(
                         behavior: "deny",
                         message: "User rejected the plan via cmux Feed."
                     ))
                 }
                 if mode == "ultraplan" {
-                    return encode(claudePermissionRequestDecision(
+                    return encode(permissionRequestHookDecision(
                         behavior: "deny",
                         message: "User chose Ultraplan via cmux Feed. Refine this plan with Ultraplan on Claude Code on the web."
                     ))
@@ -19619,7 +19619,7 @@ export default CMUXSessionRestore;
                         "destination": "session",
                     ]]
                 }
-                return encode(claudePermissionRequestDecision(
+                return encode(permissionRequestHookDecision(
                     behavior: "allow",
                     updatedInput: jsonDictionary(from: toolInput),
                     updatedPermissions: updatedPermissions
@@ -19668,7 +19668,7 @@ export default CMUXSessionRestore;
             if selections == [Self.skipInterviewAndPlanAnswer] {
                 let message = "User chose Skip interview and plan immediately via cmux Feed. Do not ask more interview questions. Write the plan now."
                 if source == "claude" {
-                    return encode(claudePermissionRequestDecision(
+                    return encode(permissionRequestHookDecision(
                         behavior: "deny",
                         message: message
                     ))
@@ -19684,7 +19684,7 @@ export default CMUXSessionRestore;
                     toolInput: toolInput,
                     selections: selections
                 )
-                return encode(claudePermissionRequestDecision(
+                return encode(permissionRequestHookDecision(
                     behavior: "allow",
                     updatedInput: updatedInput
                 ))
@@ -20343,7 +20343,7 @@ export default CMUXSessionRestore;
 
         Agent Help:
           To change cmux settings, run `cmux docs settings` and `cmux settings path`; to add Dock controls, run `cmux docs dock`.
-          Back up any existing settings file to a timestamped .bak copy before editing.
+          Back up any existing cmux.json file to a timestamped .bak copy before editing.
           Use printed curl commands to fetch the latest docs/schema, and prefer Ghostty config for terminal behavior Ghostty already supports.
 
         Commands:

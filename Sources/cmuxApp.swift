@@ -3,7 +3,6 @@ import SwiftUI
 import Darwin
 import Bonsplit
 import UniformTypeIdentifiers
-
 @main
 struct cmuxApp: App {
     @StateObject private var tabManager: TabManager
@@ -212,7 +211,7 @@ struct cmuxApp: App {
                 splitCommandButton(title: String(localized: "menu.app.settings", defaultValue: "Settings…"), shortcut: menuShortcut(for: .openSettings)) {
                     appDelegate.openPreferencesWindow(debugSource: "menu.cmdComma")
                 }
-                Button(String(localized: "menu.app.openCmuxSettingsFile", defaultValue: "Open settings.json")) {
+                Button(String(localized: "menu.app.openCmuxSettingsFile", defaultValue: "Open cmux.json")) {
                     openCmuxSettingsFileInEditor()
                 }
                 Button(String(localized: "menu.app.ghosttySettings", defaultValue: "Ghostty Settings…")) {
@@ -324,6 +323,14 @@ struct cmuxApp: App {
                 Menu("Debug Windows") {
                     Button("Background Debug…") {
                         BackgroundDebugWindowController.shared.show()
+                    }
+                    Button(
+                        String(
+                            localized: "debug.menu.bonsplitTabBarDebug",
+                            defaultValue: "Bonsplit Tab Bar Debug…"
+                        )
+                    ) {
+                        BonsplitTabBarDebugWindowController.shared.show()
                     }
                     Button("Browser Import Hint Debug…") {
                         BrowserImportHintDebugWindowController.shared.show()
@@ -621,6 +628,7 @@ struct cmuxApp: App {
                 TaskManagerWindowController.shared.show()
             }
         }
+        helpCommands
         CommandGroup(after: .toolbar) {
             splitCommandButton(title: String(localized: "menu.view.toggleSidebar", defaultValue: "Toggle Sidebar"), shortcut: menuShortcut(for: .toggleSidebar)) {
                 if AppDelegate.shared?.toggleSidebarInActiveMainWindow() != true {
@@ -824,7 +832,7 @@ struct cmuxApp: App {
         SocketControlSettings.migrateMode(socketControlMode)
     }
 
-    private func menuShortcut(for action: KeyboardShortcutSettings.Action) -> StoredShortcut {
+    func menuShortcut(for action: KeyboardShortcutSettings.Action) -> StoredShortcut {
         let _ = keyboardShortcutSettingsObserver.revision
         return KeyboardShortcutSettings.shortcut(for: action)
     }
@@ -876,8 +884,9 @@ struct cmuxApp: App {
     }
 
     private func toggleSelectedWorkspacePinned(in manager: TabManager) {
-        guard let workspace = manager.selectedWorkspace else { return }
-        manager.setPinned(workspace, pinned: !workspace.isPinned)
+        if !WorkspacePinCommands.toggleSelectedWorkspace(in: manager) {
+            NSSound.beep()
+        }
     }
 
     private func clearSelectedWorkspaceCustomName(in manager: TabManager) {
@@ -963,15 +972,12 @@ struct cmuxApp: App {
         let workspace = manager.selectedWorkspace
         let workspaceIndex = workspace.flatMap { selectedWorkspaceIndex(in: manager, workspaceId: $0.id) }
         let windowMoveTargets = selectedWorkspaceWindowMoveTargets(in: manager)
+        let pinState = WorkspacePinCommands.selectedWorkspacePinState(in: manager)
 
-        Button(
-            workspace?.isPinned == true
-                ? String(localized: "contextMenu.unpinWorkspace", defaultValue: "Unpin Workspace")
-                : String(localized: "contextMenu.pinWorkspace", defaultValue: "Pin Workspace")
-        ) {
+        Button(WorkspacePinCommands.selectedWorkspaceMenuLabel(in: manager, pinState: pinState)) {
             toggleSelectedWorkspacePinned(in: manager)
         }
-        .disabled(workspace == nil)
+        .disabled(pinState == nil)
 
         Button(String(localized: "menu.view.renameWorkspace", defaultValue: "Rename Workspace…")) {
             _ = AppDelegate.shared?.requestRenameWorkspaceViaCommandPalette()
@@ -1061,7 +1067,7 @@ struct cmuxApp: App {
     }
 
     @ViewBuilder
-    private func splitCommandButton(title: String, shortcut: StoredShortcut, action: @escaping () -> Void) -> some View {
+    func splitCommandButton(title: String, shortcut: StoredShortcut, action: @escaping () -> Void) -> some View {
         if let key = shortcut.keyEquivalent {
             Button(title, action: action)
                 .keyboardShortcut(key, modifiers: shortcut.eventModifiers)
@@ -1104,6 +1110,7 @@ struct cmuxApp: App {
         FeedPreviewWindowController.shared.show()
         FeedTextEditorDebugWindowController.shared.show()
         FeedButtonStyleDebugWindowController.shared.show()
+        BonsplitTabBarDebugWindowController.shared.show()
     }
 #endif
 }
@@ -1136,6 +1143,7 @@ private let cmuxAuxiliaryWindowIdentifiers: Set<String> = [
     "cmux.menubarDebug",
     "cmux.backgroundDebug",
     "cmux.startupAppearanceDebug",
+    "cmux.bonsplitTabBarDebug",
 ]
 
 /// Returns whether the given window should handle the standard close shortcut
@@ -1733,6 +1741,14 @@ private struct DebugWindowControlsView: View {
                         }
                         Button(
                             String(
+                                localized: "debug.menu.bonsplitTabBarDebug",
+                                defaultValue: "Bonsplit Tab Bar Debug…"
+                            )
+                        ) {
+                            BonsplitTabBarDebugWindowController.shared.show()
+                        }
+                        Button(
+                            String(
                                 localized: "debug.menu.startupAppearanceDebug",
                                 defaultValue: "Startup Appearance Debug…"
                             )
@@ -1772,6 +1788,7 @@ private struct DebugWindowControlsView: View {
                             AboutTitlebarDebugWindowController.shared.show()
                             SidebarDebugWindowController.shared.show()
                             BackgroundDebugWindowController.shared.show()
+                            BonsplitTabBarDebugWindowController.shared.show()
                             StartupAppearanceDebugWindowController.shared.show()
                             MenuBarExtraDebugWindowController.shared.show()
                             PDFPreviewChromeDebugWindowController.shared.show()
@@ -3374,26 +3391,6 @@ private final class TabBarBackdropLabWindowController: NSWindowController, NSWin
     }
 }
 
-private struct TabBarBackdropLabVariant: Identifiable {
-    let id: String
-    let title: String
-    let detail: String
-    let effect: BonsplitConfiguration.Appearance.SplitButtonBackdropEffect
-    let chromeHex: String
-    let tabBarHex: String
-    let splitButtonBackdropHex: String
-    let paneHex: String
-    let borderHex: String
-    let terminalColor: NSColor
-    let surfaceColor: NSColor
-    let separatorColor: NSColor
-    let opacity: CGFloat
-
-    var renderIdentity: String {
-        "\(id)-\(chromeHex)-\(tabBarHex)-\(splitButtonBackdropHex)-\(paneHex)-\(borderHex)-\(String(format: "%.3f", opacity))-\(String(format: "%.1f", effect.fadeWidth))-\(String(format: "%.1f", effect.contentFadeWidth))-\(String(format: "%.1f", effect.solidWidth))-\(String(format: "%.2f", effect.fadeRampStartFraction))-\(String(format: "%.2f", effect.leadingOpacity))-\(String(format: "%.2f", effect.trailingOpacity))-\(String(format: "%.2f", effect.contentOcclusionFraction))-\(effect.masksTabContent ? 1 : 0)"
-    }
-}
-
 private struct TabBarBackdropLabView: View {
     @State private var opacity: Double
     @State private var sidebarWidth: Double = 74
@@ -3435,6 +3432,7 @@ private struct TabBarBackdropLabView: View {
             fadeWidth: interpolate(strong: 20, production: production.fadeWidth, soft: 240),
             contentFadeWidth: interpolate(strong: 0, production: production.contentFadeWidth, soft: 80),
             solidWidth: interpolate(strong: 72, production: production.solidWidth, soft: 0),
+            solidSurfaceWidthAdjustment: production.solidSurfaceWidthAdjustment,
             fadeRampStartFraction: interpolate(strong: 0, production: production.fadeRampStartFraction, soft: 0.98),
             leadingOpacity: production.leadingOpacity,
             trailingOpacity: interpolate(strong: 1.0, production: production.trailingOpacity, soft: 0.25),
@@ -5203,7 +5201,7 @@ struct SettingsView: View {
     private let pickerColumnWidth: CGFloat = 196
     private let notificationSoundControlWidth: CGFloat = 280
     private let shortcutChordsDocsURL = URL(string: "https://cmux.com/docs/keyboard-shortcuts#shortcut-chords")!
-    private let settingsJSONDocsURL = URL(string: "https://cmux.com/docs/configuration#settings-json")!
+    private let settingsJSONDocsURL = URL(string: "https://cmux.com/docs/configuration#cmux-json")!
     @Environment(\.openWindow) private var openWindow
     @State private var highlightedSearchAnchorID: String?
     @State private var searchHighlightToken = 0
@@ -6937,7 +6935,7 @@ struct SettingsView: View {
                         SettingsCardRow(
                             configurationReview: .action,
                             String(localized: "settings.shortcuts.chords", defaultValue: "Shortcut Chords"),
-                            subtitle: String(localized: "settings.shortcuts.chords.subtitle", defaultValue: "Add tmux-style multi-step shortcuts in settings.json, for example [\"ctrl+b\", \"c\"]."),
+                            subtitle: String(localized: "settings.shortcuts.chords.subtitle", defaultValue: "Add tmux-style multi-step shortcuts in cmux.json, for example [\"ctrl+b\", \"c\"]."),
                             searchAnchorID: SettingsSearchIndex.settingID(for: .keyboardShortcuts, idSuffix: "shortcut-chords")
                         ) {
                             HStack(spacing: 8) {
@@ -6945,7 +6943,7 @@ struct SettingsView: View {
                                     .font(.caption)
                                     .accessibilityIdentifier("SettingsKeyboardShortcutsChordDocsLink")
 
-                                Button(String(localized: "settings.app.settingsFile.openButton", defaultValue: "Open settings.json")) {
+                                Button(String(localized: "settings.app.settingsFile.openButton", defaultValue: "Open cmux.json")) {
                                     openCmuxSettingsFileInEditor()
                                 }
                                 .buttonStyle(.bordered)
@@ -7102,7 +7100,7 @@ struct SettingsView: View {
                         SettingsCardNote(
                             String(
                                 localized: "settings.workspaceColors.dictionaryNote",
-                                defaultValue: "Edit settings.json to add or remove named colors. \"Choose Custom Color...\" still adds local Custom N entries."
+                                defaultValue: "Edit cmux.json to add or remove named colors. \"Choose Custom Color...\" still adds local Custom N entries."
                             )
                         )
 
@@ -7110,7 +7108,7 @@ struct SettingsView: View {
                             SettingsCardNote(
                                 String(
                                     localized: "settings.workspaceColors.emptyPalette",
-                                    defaultValue: "No palette entries. Add colors in settings.json or use \"Choose Custom Color...\" from a workspace context menu."
+                                    defaultValue: "No palette entries. Add colors in cmux.json or use \"Choose Custom Color...\" from a workspace context menu."
                                 )
                             )
                         } else {
@@ -7173,13 +7171,13 @@ struct SettingsView: View {
                         }
                     }
 
-                    SettingsSectionHeader(title: String(localized: "settings.section.settingsJSON", defaultValue: "settings.json"))
+                    SettingsSectionHeader(title: String(localized: "settings.section.settingsJSON", defaultValue: "cmux.json"))
                         .settingsSearchAnchor(SettingsSearchIndex.sectionID(for: .settingsJSON))
                         .accessibilityIdentifier("SettingsJSONSection")
                     SettingsCard {
                         SettingsCardRow(
                             configurationReview: .action,
-                            String(localized: "settings.settingsJSON.file", defaultValue: "User settings file"),
+                            String(localized: "settings.settingsJSON.file", defaultValue: "User config file"),
                             subtitle: String(localized: "settings.settingsJSON.file.subtitle", defaultValue: "Edit cmux-owned app settings, shortcuts, automation, sidebar, notifications, and browser behavior."),
                             controlWidth: 330,
                             searchAnchorID: SettingsSearchIndex.settingID(for: .settingsJSON, idSuffix: "open-file")
@@ -7771,7 +7769,7 @@ private enum SettingsConfigurationReview: Equatable {
         let unknownPaths = paths.filter { !CmuxSettingsFileStore.supportedSettingsJSONPaths.contains($0) }
         precondition(
             unknownPaths.isEmpty,
-            "Unknown settings.json path(s): \(unknownPaths.joined(separator: ", "))",
+            "Unknown cmux.json settings path(s): \(unknownPaths.joined(separator: ", "))",
             file: file,
             line: line
         )
