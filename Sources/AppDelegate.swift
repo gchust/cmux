@@ -609,10 +609,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private final class MainWindowController: NSWindowController, NSWindowDelegate {
         var onClose: (() -> Void)?
+        var shouldClose: (() -> Bool)?
 
-        func windowWillClose(_ notification: Notification) {
-            onClose?()
-        }
+        func windowShouldClose(_ sender: NSWindow) -> Bool { shouldClose?() ?? true }
+        func windowWillClose(_ notification: Notification) { onClose?() }
     }
 
     struct ScriptableMainWindowState {
@@ -3278,12 +3278,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         !isTerminatingApp
     }
 
-    nonisolated static func shouldRemoveSnapshotWhenNoWindowsRemainOnWindowUnregister(
-        isTerminatingApp: Bool
-    ) -> Bool {
-        !isTerminatingApp
-    }
-
     nonisolated static func shouldSkipSessionSaveDuringRestore(
         isApplyingSessionRestore: Bool,
         includeScrollback: Bool
@@ -4456,8 +4450,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func setCommandPaletteVisible(_ visible: Bool, for window: NSWindow) {
         guard let windowId = mainWindowId(for: window) else { return }
-        let wasVisible = commandPaletteVisibilityByWindowId[windowId] ?? false
-        commandPaletteVisibilityByWindowId[windowId] = visible
+        let wasVisible = commandPaletteVisibilityByWindowId.updateValue(visible, forKey: windowId) ?? false
+        postCommandPaletteVisibilityDidChangeIfNeeded(wasVisible: wasVisible, visible: visible, window: window, windowId: windowId)
         // Opening (false -> true) always resolves pending-open.
         // Closing (true -> false) also clears stale pending state.
         // Ignore repeated false updates so a stale sync cannot erase an in-flight open request.
@@ -6880,6 +6874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             guard let self, let controller else { return }
             self.mainWindowControllers.removeAll(where: { $0 === controller })
         }
+        controller.shouldClose = { [weak self] in self?.handleMainTerminalWindowShouldClose() ?? true }
         window.delegate = controller
         mainWindowControllers.append(controller)
 
@@ -10089,6 +10084,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             matching: [.keyDown, .keyUp, .flagsChanged, .systemDefined]
         ) { [weak self] event in
             guard let self else { return event }
+            if ShortcutRecorderEventRouter.dispatchActiveRecordingEvent(
+                event,
+                preferredWindow: event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+            ) {
+                return nil
+            }
             if event.type == .systemDefined {
                 return event
             }
@@ -13152,15 +13153,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
     }
 
+    private func handleMainTerminalWindowShouldClose() -> Bool {
+        // XCTest has no UI for the warn-before-quit dialog and would either block
+        // on runModal or have NSApp.terminate kill the test process.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return true }
+        guard !isTerminatingApp, mainWindowContexts.count <= 1 else { return true }
+        _ = handleQuitShortcutWarning()
+        return false
+    }
+
     private func unregisterMainWindow(_ window: NSWindow) {
         // Reset cascade point so the next new window appears near the closing
         // window's position, matching upstream Ghostty behavior.
         let frame = window.frame
         lastCascadePoint = NSPoint(x: frame.minX, y: frame.maxY)
 
-        // Keep geometry available as a fallback even if the full session snapshot
-        // is removed when the last window closes.
+        // Keep geometry available as a fallback for the next window placement.
         persistWindowGeometry(from: window)
+
         guard let removed = unregisterMainWindowContext(for: window) else { return }
         commandPaletteVisibilityByWindowId.removeValue(forKey: removed.windowId)
         commandPalettePendingOpenByWindowId.removeValue(forKey: removed.windowId)
@@ -13194,12 +13204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // in applicationShouldTerminate/applicationWillTerminate. Saving again here would
         // overwrite it as windows tear down one-by-one, dropping closed windows and replay.
         if Self.shouldPersistSnapshotOnWindowUnregister(isTerminatingApp: isTerminatingApp) {
-            _ = saveSessionSnapshot(
-                includeScrollback: false,
-                removeWhenEmpty: Self.shouldRemoveSnapshotWhenNoWindowsRemainOnWindowUnregister(
-                    isTerminatingApp: isTerminatingApp
-                )
-            )
+            _ = saveSessionSnapshot(includeScrollback: false, removeWhenEmpty: false)
         }
     }
 
@@ -13632,6 +13637,12 @@ private extension NSApplication {
            AppDelegate.shared?.handleMinimalModeTitlebarDoubleClickMouseDown(event: event) == true {
             return
         }
+        if ShortcutRecorderEventRouter.dispatchActiveRecordingEvent(
+            event,
+            preferredWindow: event.window ?? keyWindow ?? mainWindow
+        ) {
+            return
+        }
         if AppDelegate.shared?.shouldSuppressStaleCmuxMenuShortcut(event: event) == true {
             let responder = event.window?.firstResponder
                 ?? keyWindow?.firstResponder
@@ -13985,6 +13996,9 @@ private extension NSWindow {
             Self.cmuxOwningWebView(for: $0, in: self, event: event)
         }
         let firstResponderHasMarkedText = browserResponderHasMarkedText(self.firstResponder)
+        if ShortcutRecorderEventRouter.dispatchActiveRecordingEvent(event, preferredWindow: self) {
+            return true
+        }
         if let mode = RightSidebarMode.modeShortcut(for: event),
            AppDelegate.shared?.shouldRouteRightSidebarModeShortcut(in: self) == true {
             _ = AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
