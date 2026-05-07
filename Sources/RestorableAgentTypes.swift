@@ -3,10 +3,12 @@ import Foundation
 enum RestorableAgentKind: String, Codable, CaseIterable, Sendable {
     case claude
     case codex
+    case pi
     case cursor
     case gemini
     case opencode
     case rovodev
+    case hermesAgent = "hermes-agent"
     case copilot
     case codebuddy
     case factory

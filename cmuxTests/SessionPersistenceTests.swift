@@ -1167,6 +1167,14 @@ final class SessionPersistenceTests: XCTestCase {
                 ]
             ),
             (
+                .pi,
+                [
+                    "/usr/local/bin/pi",
+                    "--model",
+                    "anthropic/claude-sonnet-4-5",
+                ]
+            ),
+            (
                 .cursor,
                 [
                     "/usr/local/bin/cursor-agent",
@@ -1199,6 +1207,7 @@ final class SessionPersistenceTests: XCTestCase {
                     "--yolo",
                 ]
             ),
+            (.hermesAgent, ["/usr/local/bin/hermes", "--tui", "--model", "anthropic/claude-sonnet-4.6"]),
             (
                 .copilot,
                 [
@@ -1347,6 +1356,8 @@ final class SessionPersistenceTests: XCTestCase {
                 resolvedEnvironment = ["CLAUDE_CONFIG_DIR": "/tmp/claude"]
             case .codex:
                 resolvedEnvironment = ["CODEX_HOME": "/tmp/codex"]
+            case .pi:
+                resolvedEnvironment = ["PI_CODING_AGENT_DIR": "/tmp/pi"]
             case .cursor:
                 resolvedEnvironment = [:]
             case .gemini:
@@ -1355,6 +1366,8 @@ final class SessionPersistenceTests: XCTestCase {
                 resolvedEnvironment = ["OPENCODE_CONFIG_DIR": "/tmp/opencode"]
             case .rovodev:
                 resolvedEnvironment = [:]
+            case .hermesAgent:
+                resolvedEnvironment = ["HERMES_HOME": "/tmp/hermes"]
             case .copilot:
                 resolvedEnvironment = ["COPILOT_HOME": "/tmp/copilot"]
             case .codebuddy:
