@@ -5138,6 +5138,10 @@ struct SettingsView: View {
     private var paneFirstClickFocusEnabled = PaneFirstClickFocusSettings.defaultEnabled
     @AppStorage(TerminalScrollBarSettings.showScrollBarKey)
     private var showTerminalScrollBar = TerminalScrollBarSettings.defaultShowScrollBar
+    @AppStorage(FileDropBehaviorSettings.defaultBehaviorKey)
+    private var fileDropDefaultBehavior = FileDropBehaviorSettings.defaultBehavior.rawValue
+    @AppStorage(AgentSessionAutoResumeSettings.autoResumeAgentSessionsKey)
+    private var autoResumeAgentSessions = AgentSessionAutoResumeSettings.defaultAutoResumeAgentSessions
     @AppStorage(WorkspaceAutoReorderSettings.key) private var workspaceAutoReorder = WorkspaceAutoReorderSettings.defaultValue
     @AppStorage(IMessageModeSettings.key) private var iMessageMode = IMessageModeSettings.defaultValue
     @AppStorage(SidebarWorkspaceDetailSettings.hideAllDetailsKey)
@@ -5262,6 +5266,30 @@ struct SettingsView: View {
                 guard showTerminalScrollBar != newValue else { return }
                 showTerminalScrollBar = newValue
                 TerminalScrollBarSettings.notifyDidChange()
+            }
+        )
+    }
+
+    private var selectedFileDropDefaultBehavior: FileDropDefaultBehavior {
+        FileDropBehaviorSettings.behavior(for: fileDropDefaultBehavior)
+    }
+
+    private var fileDropDefaultBehaviorSelection: Binding<String> {
+        Binding(
+            get: { selectedFileDropDefaultBehavior.rawValue },
+            set: { newValue in
+                fileDropDefaultBehavior = FileDropBehaviorSettings.behavior(for: newValue).rawValue
+            }
+        )
+    }
+
+    private var autoResumeAgentSessionsBinding: Binding<Bool> {
+        Binding(
+            get: { autoResumeAgentSessions },
+            set: { newValue in
+                guard autoResumeAgentSessions != newValue else { return }
+                autoResumeAgentSessions = newValue
+                AgentSessionAutoResumeSettings.notifyDidChange()
             }
         )
     }
@@ -5846,6 +5874,21 @@ struct SettingsView: View {
 
                         SettingsCardDivider()
 
+                        SettingsPickerRow(
+                            configurationReview: .settingsOnly,
+                            String(localized: "settings.app.fileDrop.defaultBehavior", defaultValue: "File Drops"),
+                            subtitle: selectedFileDropDefaultBehavior.settingsSubtitle,
+                            controlWidth: pickerColumnWidth,
+                            selection: fileDropDefaultBehaviorSelection
+                        ) {
+                            ForEach(FileDropDefaultBehavior.allCases) { behavior in
+                                Text(behavior.displayName).tag(behavior.rawValue)
+                            }
+                        }
+                        .settingsSearchAnchor(SettingsSearchIndex.settingID(for: .app, idSuffix: "file-drops"))
+
+                        SettingsCardDivider()
+
                         SettingsCardRow(
                             configurationReview: .json("app.preferredEditor"),
                             String(localized: "settings.app.preferredEditor", defaultValue: "Open Files With"),
@@ -6182,6 +6225,24 @@ struct SettingsView: View {
                                 .accessibilityIdentifier("SettingsTerminalScrollBarToggle")
                                 .accessibilityLabel(
                                     String(localized: "settings.terminal.scrollBar", defaultValue: "Show Terminal Scroll Bar")
+                                )
+                        }
+
+                        SettingsCardDivider()
+
+                        SettingsCardRow(
+                            configurationReview: .json("terminal.autoResumeAgentSessions"),
+                            String(localized: "settings.terminal.agentAutoResume", defaultValue: "Resume Agent Sessions on Reopen"),
+                            subtitle: autoResumeAgentSessions
+                                ? String(localized: "settings.terminal.agentAutoResume.subtitleOn", defaultValue: "When cmux reopens after quit, restored agent terminals automatically run their resume command.")
+                                : String(localized: "settings.terminal.agentAutoResume.subtitleOff", defaultValue: "When cmux reopens after quit, restored agent terminals stay idle until you resume them manually.")
+                        ) {
+                            Toggle("", isOn: autoResumeAgentSessionsBinding)
+                                .labelsHidden()
+                                .controlSize(.small)
+                                .accessibilityIdentifier("SettingsTerminalAgentAutoResumeToggle")
+                                .accessibilityLabel(
+                                    String(localized: "settings.terminal.agentAutoResume", defaultValue: "Resume Agent Sessions on Reopen")
                                 )
                         }
                     }
@@ -7310,6 +7371,12 @@ struct SettingsView: View {
         showTerminalScrollBar = TerminalScrollBarSettings.defaultShowScrollBar
         if previousShowTerminalScrollBar != showTerminalScrollBar {
             TerminalScrollBarSettings.notifyDidChange()
+        }
+        fileDropDefaultBehavior = FileDropBehaviorSettings.defaultBehavior.rawValue
+        let previousAutoResumeAgentSessions = autoResumeAgentSessions
+        autoResumeAgentSessions = AgentSessionAutoResumeSettings.defaultAutoResumeAgentSessions
+        if previousAutoResumeAgentSessions != autoResumeAgentSessions {
+            AgentSessionAutoResumeSettings.notifyDidChange()
         }
         workspaceAutoReorder = WorkspaceAutoReorderSettings.defaultValue
         iMessageMode = IMessageModeSettings.defaultValue
