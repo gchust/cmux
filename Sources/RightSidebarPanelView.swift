@@ -149,11 +149,11 @@ struct RightSidebarPanelView: View {
     let onResumeSession: ((SessionEntry) -> Void)?
     let onOpenFilePreview: (String) -> Void
 
-    @StateObject private var modeShortcutHintMonitor = WindowScopedShortcutHintModifierMonitor(activation: .commandOrControl) { window in
+    @State private var modeShortcutHintMonitor = WindowScopedShortcutHintModifierMonitor(activation: .commandOrControl) { window in
         guard let responder = window.firstResponder else { return false }
         return AppDelegate.shared?.isRightSidebarFocusResponder(responder, in: window) == true
     }
-    @StateObject private var focusShortcutHintMonitor = WindowScopedShortcutHintModifierMonitor(activation: .commandOnly)
+    @State private var focusShortcutHintMonitor = WindowScopedShortcutHintModifierMonitor(activation: .commandOnly)
     @StateObject private var dockStore = DockControlsStore()
     @ObservedObject private var keyboardShortcutSettingsObserver = KeyboardShortcutSettingsObserver.shared
     @AppStorage(ShortcutHintDebugSettings.alwaysShowHintsKey)
@@ -219,27 +219,32 @@ struct RightSidebarPanelView: View {
     private var modeBar: some View {
         let _ = keyboardShortcutSettingsObserver.revision
         let showsModeShortcutHints = alwaysShowShortcutHints || modeShortcutHintMonitor.isModifierPressed
-        return HStack(spacing: 4) {
-            ForEach(availableModes, id: \.rawValue) { mode in
-                ModeBarButton(
-                    mode: mode,
-                    isSelected: fileExplorerState.mode == mode,
-                    badgeCount: mode == .feed ? feedPendingCount : 0,
-                    shortcutHint: KeyboardShortcutSettings.shortcut(for: mode.shortcutAction),
-                    showsShortcutHint: showsModeShortcutHints
-                ) {
-                    if AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+        return ZStack {
+            WindowDragHandleView()
+
+            HStack(spacing: 4) {
+                ForEach(availableModes, id: \.rawValue) { mode in
+                    ModeBarButton(
                         mode: mode,
-                        focusFirstItem: true,
-                        preferredWindow: NSApp.keyWindow ?? NSApp.mainWindow
-                    ) != true {
-                        selectMode(mode)
+                        isSelected: fileExplorerState.mode == mode,
+                        badgeCount: mode == .feed ? feedPendingCount : 0,
+                        shortcutHint: KeyboardShortcutSettings.shortcut(for: mode.shortcutAction),
+                        showsShortcutHint: showsModeShortcutHints
+                    ) {
+                        if AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                            mode: mode,
+                            focusFirstItem: true,
+                            preferredWindow: NSApp.keyWindow ?? NSApp.mainWindow
+                        ) != true {
+                            selectMode(mode)
+                        }
                     }
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
         }
         .rightSidebarChromeBar(leadingPadding: 4, trailingPadding: 6, height: titlebarHeight)
+        .background(TitlebarDoubleClickMonitorView())
         .background(MinimalModeTitlebarControlHitRegionView())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("RightSidebarModeBar")

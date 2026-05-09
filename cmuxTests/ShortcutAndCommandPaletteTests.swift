@@ -839,6 +839,40 @@ final class CommandPaletteSelectionScrollBehaviorTests: XCTestCase {
 
 
 final class ShortcutHintModifierPolicyTests: XCTestCase {
+    func testTitlebarShortcutHintAlwaysShowAllowsBoundNonCommandShortcut() {
+        let controlShortcut = StoredShortcut(key: "R", command: false, shift: false, option: false, control: true)
+        let commandShortcut = StoredShortcut(key: "R", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            titlebarShortcutHintShouldShow(
+                shortcut: controlShortcut,
+                alwaysShowShortcutHints: true,
+                modifierPressed: false
+            )
+        )
+        XCTAssertFalse(
+            titlebarShortcutHintShouldShow(
+                shortcut: controlShortcut,
+                alwaysShowShortcutHints: false,
+                modifierPressed: true
+            )
+        )
+        XCTAssertTrue(
+            titlebarShortcutHintShouldShow(
+                shortcut: commandShortcut,
+                alwaysShowShortcutHints: false,
+                modifierPressed: true
+            )
+        )
+        XCTAssertFalse(
+            titlebarShortcutHintShouldShow(
+                shortcut: .unbound,
+                alwaysShowShortcutHints: true,
+                modifierPressed: true
+            )
+        )
+    }
+
     func testShortcutHintRequiresEnabledCommandOrControlOnlyModifier() {
         withDefaultsSuite { defaults in
             defaults.set(true, forKey: ShortcutHintDebugSettings.showHintsOnCommandHoldKey)
@@ -1133,6 +1167,24 @@ final class RightSidebarModeShortcutHintTests: XCTestCase {
         XCTAssertEqual(RightSidebarMode.sessions.shortcutAction, .switchRightSidebarToSessions)
         XCTAssertEqual(RightSidebarMode.feed.shortcutAction, .switchRightSidebarToFeed)
         XCTAssertEqual(RightSidebarMode.dock.shortcutAction, .switchRightSidebarToDock)
+    }
+
+    func testModeShortcutsAreUnboundByDefault() {
+        XCTAssertNil(
+            RightSidebarMode.modeShortcut(for: makeKeyDownEvent(key: "1", modifiers: [.control], keyCode: 18))
+        )
+        XCTAssertNil(
+            RightSidebarMode.modeShortcut(for: makeKeyDownEvent(key: "2", modifiers: [.control], keyCode: 19))
+        )
+        XCTAssertNil(
+            RightSidebarMode.modeShortcut(for: makeKeyDownEvent(key: "3", modifiers: [.control], keyCode: 20))
+        )
+        XCTAssertNil(
+            RightSidebarMode.modeShortcut(for: makeKeyDownEvent(key: "4", modifiers: [.control], keyCode: 21))
+        )
+        XCTAssertNil(
+            RightSidebarMode.modeShortcut(for: makeKeyDownEvent(key: "5", modifiers: [.control], keyCode: 23))
+        )
     }
 
     func testModeShortcutUsesConfiguredBindings() {
