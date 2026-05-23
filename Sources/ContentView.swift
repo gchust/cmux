@@ -6592,6 +6592,21 @@ struct ContentView: View {
         )
         contributions.append(
             CommandPaletteCommandContribution(
+                commandId: "palette.openGhosttySettings",
+                title: constant(
+                    String(
+                        localized: "command.openGhosttySettings.title",
+                        defaultValue: "Open Ghostty Settings in TextEdit"
+                    )
+                ),
+                subtitle: constant(
+                    String(localized: "command.openGhosttySettings.subtitle", defaultValue: "Ghostty Config Files")
+                ),
+                keywords: ["open", "ghostty", "settings", "config", "configuration", "file", "textedit", "terminal"]
+            )
+        )
+        contributions.append(
+            CommandPaletteCommandContribution(
                 commandId: "palette.checkForUpdates",
                 title: constant(String(localized: "command.checkForUpdates.title", defaultValue: "Check for Updates")),
                 subtitle: constant(String(localized: "command.checkForUpdates.subtitle", defaultValue: "Global")),
@@ -7537,6 +7552,12 @@ struct ContentView: View {
             cmuxDebugLog("palette.openCmuxSettingsFile.invoke")
 #endif
             openCmuxSettingsFileInEditor()
+        }
+        registry.register(commandId: "palette.openGhosttySettings") {
+#if DEBUG
+            cmuxDebugLog("palette.openGhosttySettings.invoke")
+#endif
+            GhosttyApp.shared.openConfigurationInTextEdit()
         }
         registry.register(commandId: "palette.checkForUpdates") {
             AppDelegate.shared?.checkForUpdates(nil)
@@ -9781,14 +9802,12 @@ struct VerticalTabsSidebar: View {
                     Color.clear.frame(height: scrollInsets.bottom)
                         .allowsHitTesting(false)
                 }
-                .overlay(alignment: .top) {
-                    SidebarTopScrim(height: sidebarTopScrimHeight)
-                        .allowsHitTesting(false)
-                }
-                .overlay(alignment: .bottom) {
-                    SidebarBottomScrim(height: sidebarBottomScrimHeight)
-                        .allowsHitTesting(false)
-                }
+                .mask(
+                    SidebarWorkspaceScrollEdgeFadeMask(
+                        topHeight: sidebarTopScrimHeight,
+                        bottomHeight: sidebarBottomScrimHeight
+                    )
+                )
                 .overlay(alignment: .top) {
                     // The sidebar top strip remains draggable and handles
                     // double-clicks with the standard titlebar action.
@@ -9932,14 +9951,12 @@ struct VerticalTabsSidebar: View {
                 Color.clear.frame(height: SidebarWorkspaceScrollInsets.workspaceList.bottom)
                     .allowsHitTesting(false)
             }
-            .overlay(alignment: .top) {
-                SidebarTopScrim(height: sidebarTopScrimHeight)
-                    .allowsHitTesting(false)
-            }
-            .overlay(alignment: .bottom) {
-                SidebarBottomScrim(height: sidebarBottomScrimHeight)
-                    .allowsHitTesting(false)
-            }
+            .mask(
+                SidebarWorkspaceScrollEdgeFadeMask(
+                    topHeight: sidebarTopScrimHeight,
+                    bottomHeight: sidebarBottomScrimHeight
+                )
+            )
             .overlay(alignment: .top) {
                 WindowDragHandleView()
                     .frame(height: sidebarTitlebarInteractionHeight)
