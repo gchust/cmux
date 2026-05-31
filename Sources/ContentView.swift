@@ -2373,6 +2373,7 @@ struct ContentView: View {
         .background(TitlebarDoubleClickMonitorView())
         .overlay(alignment: .bottom) {
             WindowChromeBorder(orientation: .horizontal)
+                .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
         }
     }
 
@@ -5840,6 +5841,8 @@ struct ContentView: View {
             return String(localized: "commandPalette.kind.rightSidebarTool", defaultValue: "Tool")
         case .project:
             return String(localized: "commandPalette.kind.project", defaultValue: "Project")
+        case .extensionBrowser:
+            return String(localized: "sidebar.extensions.browser.title", defaultValue: "Sidebar Extensions")
         }
     }
 
@@ -5857,6 +5860,8 @@ struct ContentView: View {
             return ["tool", "files", "find", "vault", "sidebar"]
         case .project:
             return ["project", "xcode", "build", "settings", "schemes", "targets"]
+        case .extensionBrowser:
+            return ["sidebar", "extensions", "extensionkit", "browser"]
         }
     }
 
@@ -10012,7 +10017,7 @@ private final class CmuxExtensionSidebarMenuTarget: NSObject {
 
     @objc func manageExtensions(_ sender: NSMenuItem) {
         guard let anchorView = sender.representedObject as? NSView else { return }
-        CMUXSidebarExtensionBrowserPresenter.present(
+        AppDelegate.shared?.openSidebarExtensionBrowser(
             from: anchorView,
             title: String(localized: "sidebar.extensions.browser.title", defaultValue: "Sidebar Extensions")
         )
@@ -11021,6 +11026,8 @@ struct VerticalTabsSidebar: View {
             return .rightSidebarTool
         case .project:
             return .project
+        case .extensionBrowser:
+            return .unknown
         }
     }
 
