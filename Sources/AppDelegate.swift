@@ -1727,6 +1727,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if mainWindowVisibilityController.finishPendingApplicationActivationRestore(windows: activationWindows, reason: .applicationDidBecomeActive) == nil, !hasVisibleMainTerminalWindow() {
             _ = mainWindowVisibilityController.restoreApplicationWindowsAfterActivation(windows: activationWindows, reason: .applicationDidBecomeActive)
         }
+        recoverRemoteWorkspacesForVisibleMainWindowContexts(reason: "app.didBecomeActive")
         sentryBreadcrumb("app.didBecomeActive", category: "lifecycle", data: [
             "tabCount": tabManager?.tabs.count ?? 0
         ])
@@ -1747,6 +1748,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             tab.triggerNotificationFocusFlash(panelId: surfaceId, requiresSplit: false, shouldFocus: false)
         }
         notificationStore.markRead(forTabId: tabId, surfaceId: surfaceId)
+    }
+
+    private func recoverRemoteWorkspacesForVisibleMainWindowContexts(reason: String) {
+        var recoveredWorkspaceIds: Set<UUID> = []
+        for context in Array(mainWindowContexts.values) {
+            guard let window = resolvedWindow(for: context),
+                  window.isVisible,
+                  !window.isMiniaturized,
+                  let selectedWorkspaceId = context.tabManager.selectedTabId,
+                  recoveredWorkspaceIds.insert(selectedWorkspaceId).inserted,
+                  let workspace = context.tabManager.tabs.first(where: { $0.id == selectedWorkspaceId }) else {
+                continue
+            }
+            workspace.recoverRemoteOnUserActivation(reason: reason)
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

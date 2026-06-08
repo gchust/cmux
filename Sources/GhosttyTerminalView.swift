@@ -5385,6 +5385,14 @@ final class TerminalSurface: Identifiable, ObservableObject {
     /// rejected and quarantined.
     var hasLiveSurface: Bool { surface != nil && portalLifecycleState == .live }
 
+    @MainActor
+    var processExited: Bool {
+        guard let liveSurface = liveSurfaceForGhosttyAccess(reason: "processExited") else {
+            return false
+        }
+        return ghostty_surface_process_exited(liveSurface)
+    }
+
     /// Whether the terminal surface view is currently attached to a window.
     ///
     /// Use the hosted view rather than the inner surface view, since the surface can be

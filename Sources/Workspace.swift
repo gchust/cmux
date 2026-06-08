@@ -10600,9 +10600,13 @@ final class Workspace: Identifiable, ObservableObject {
     private var remoteLastErrorFingerprint: String?
     private var remoteLastDaemonErrorFingerprint: String?
     private var remoteLastPortConflictFingerprint: String?
+    private var hasProxyOnlyRemoteConnectionError = false
     private var remoteDetectedSurfaceIds: Set<UUID> = []
     private var activeRemoteTerminalSurfaceIds: Set<UUID> = []
     private var endedPersistentRemotePTYAttachSurfaceIds: Set<UUID> = []
+    private var failedPersistentRemotePTYAttachSurfaceIds: Set<UUID> = []
+    private var failedPersistentRemotePTYSessionIDsByPanelId: [UUID: String] = [:]
+    private var explicitRemotePTYSessionSurfaceIds: Set<UUID> = []
     private var remotePTYSessionIDsByPanelId: [UUID: String] = [:]
     private var remoteRelayWorkspaceIDAliases: [UUID: UUID] = [:]
     private var remoteRelaySurfaceIDAliases: [UUID: UUID] = [:]
@@ -10627,6 +10631,9 @@ final class Workspace: Identifiable, ObservableObject {
         return formatter
     }()
     nonisolated(unsafe) static var runSSHControlMasterCommandOverrideForTesting: (([String]) -> Void)?
+#if DEBUG
+    nonisolated(unsafe) static var reconnectRemoteConnectionOverrideForTesting: ((Workspace) -> Void)?
+#endif
     var panelShellActivityStates: [UUID: PanelShellActivityState] = [:]
     /// PIDs associated with agent status entries (e.g. claude_code), keyed by status key.
     /// Used for stale-session detection: if the PID is dead, the status entry is cleared.
@@ -10750,11 +10757,6 @@ final class Workspace: Identifiable, ObservableObject {
     private var preservesSSHTerminalConnection: Bool {
         activeRemoteTerminalSessionCount > 0
             && remoteConfiguration?.terminalStartupCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-    }
-
-    private var hasProxyOnlyRemoteSidebarError: Bool {
-        guard let entry = statusEntries[Self.remoteErrorStatusKey]?.value else { return false }
-        return entry.lowercased().contains("remote proxy unavailable")
     }
 
     private func remoteNotificationCooldownKey(target: String) -> String? {
@@ -12877,6 +12879,9 @@ final class Workspace: Identifiable, ObservableObject {
         }
         remotePTYSessionIDsByPanelId = remotePTYSessionIDsByPanelId.filter { validSurfaceIds.contains($0.key) }
         endedPersistentRemotePTYAttachSurfaceIds = endedPersistentRemotePTYAttachSurfaceIds.filter { validSurfaceIds.contains($0) }
+        failedPersistentRemotePTYAttachSurfaceIds = failedPersistentRemotePTYAttachSurfaceIds.filter { validSurfaceIds.contains($0) }
+        failedPersistentRemotePTYSessionIDsByPanelId = failedPersistentRemotePTYSessionIDsByPanelId.filter { validSurfaceIds.contains($0.key) }
+        explicitRemotePTYSessionSurfaceIds = explicitRemotePTYSessionSurfaceIds.filter { validSurfaceIds.contains($0) }
         pruneRemoteRelaySurfaceAliases(validSurfaceIds: validSurfaceIds)
         remoteDetectedSurfaceIds = remoteDetectedSurfaceIds.filter { validSurfaceIds.contains($0) }
         panelShellActivityStates = panelShellActivityStates.filter { validSurfaceIds.contains($0.key) }
@@ -13280,7 +13285,7 @@ final class Workspace: Identifiable, ObservableObject {
             ]
         } else {
             let proxyState: String
-            if hasProxyOnlyRemoteSidebarError {
+            if hasProxyOnlyRemoteConnectionError {
                 proxyState = "error"
             } else {
                 switch remoteConnectionState {
@@ -13330,6 +13335,9 @@ final class Workspace: Identifiable, ObservableObject {
            !previousConfiguration.hasSamePersistentPTYIdentity(as: configuration) {
             remotePTYSessionIDsByPanelId.removeAll()
             endedPersistentRemotePTYAttachSurfaceIds.removeAll()
+            failedPersistentRemotePTYAttachSurfaceIds.removeAll()
+            failedPersistentRemotePTYSessionIDsByPanelId.removeAll()
+            explicitRemotePTYSessionSurfaceIds.removeAll()
             clearRemoteRelayIDAliases()
         }
         remoteConfiguration = configuration
@@ -13339,6 +13347,7 @@ final class Workspace: Identifiable, ObservableObject {
         remoteForwardedPorts = []
         remotePortConflicts = []
         remoteProxyEndpoint = nil
+        hasProxyOnlyRemoteConnectionError = false
         remoteHeartbeatCount = 0
         remoteLastHeartbeatAt = nil
         remoteConnectionDetail = nil
@@ -13390,6 +13399,12 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func reconnectRemoteConnection() {
+#if DEBUG
+        if let override = Self.reconnectRemoteConnectionOverrideForTesting {
+            override(self)
+            return
+        }
+#endif
         guard let configuration = remoteConfiguration else { return }
         configureRemoteConnection(configuration, autoConnect: true)
     }
@@ -13434,6 +13449,9 @@ final class Workspace: Identifiable, ObservableObject {
         pendingRemoteForegroundAuthToken = nil
         activeRemoteTerminalSurfaceIds.removeAll()
         endedPersistentRemotePTYAttachSurfaceIds.removeAll()
+        failedPersistentRemotePTYAttachSurfaceIds.removeAll()
+        failedPersistentRemotePTYSessionIDsByPanelId.removeAll()
+        explicitRemotePTYSessionSurfaceIds.removeAll()
         activeRemoteTerminalSessionCount = 0
         pendingRemoteSurfaceTTYName = nil
         pendingRemoteSurfaceTTYSurfaceId = nil
@@ -13444,6 +13462,7 @@ final class Workspace: Identifiable, ObservableObject {
         remoteForwardedPorts = []
         remotePortConflicts = []
         remoteProxyEndpoint = nil
+        hasProxyOnlyRemoteConnectionError = false
         remoteHeartbeatCount = 0
         remoteLastHeartbeatAt = nil
         remoteConnectionState = .disconnected
@@ -13457,6 +13476,9 @@ final class Workspace: Identifiable, ObservableObject {
         if clearConfiguration {
             remotePTYSessionIDsByPanelId.removeAll()
             endedPersistentRemotePTYAttachSurfaceIds.removeAll()
+            failedPersistentRemotePTYAttachSurfaceIds.removeAll()
+            failedPersistentRemotePTYSessionIDsByPanelId.removeAll()
+            explicitRemotePTYSessionSurfaceIds.removeAll()
             clearRemoteRelayIDAliases()
             remoteConfiguration = nil
             skipControlMasterCleanupAfterDetachedRemoteTransfer = false
@@ -13486,17 +13508,29 @@ final class Workspace: Identifiable, ObservableObject {
             panel is TerminalPanel ? panelId : nil
         }
         guard terminalIds.count == 1, let initialPanelId = terminalIds.first else { return }
+        guard !endedPersistentRemotePTYAttachSurfaceIds.contains(initialPanelId),
+              !failedPersistentRemotePTYAttachSurfaceIds.contains(initialPanelId) else {
+            return
+        }
         trackRemoteTerminalSurface(initialPanelId)
     }
 
     private func trackRemoteTerminalSurface(_ panelId: UUID) {
         skipControlMasterCleanupAfterDetachedRemoteTransfer = false
         endedPersistentRemotePTYAttachSurfaceIds.remove(panelId)
+        failedPersistentRemotePTYAttachSurfaceIds.remove(panelId)
+        failedPersistentRemotePTYSessionIDsByPanelId.removeValue(forKey: panelId)
         pendingRemoteTerminalChildExitSurfaceIds.remove(panelId)
         transferredRemoteCleanupConfigurationsByPanelId.removeValue(forKey: panelId)
-        if remoteConfiguration?.preserveAfterTerminalExit == true,
-           normalizedRemotePTYSessionID(remotePTYSessionIDsByPanelId[panelId]) == nil {
-            remotePTYSessionIDsByPanelId[panelId] = Self.defaultSSHPTYSessionID(workspaceId: id, panelId: panelId)
+        if remoteConfiguration?.preserveAfterTerminalExit == true {
+            if let storedSessionID = normalizedRemotePTYSessionID(remotePTYSessionIDsByPanelId[panelId]) {
+                updateExplicitRemotePTYSessionMarker(panelId: panelId, sessionID: storedSessionID)
+            } else {
+                storeRemotePTYSessionID(
+                    Self.defaultSSHPTYSessionID(workspaceId: id, panelId: panelId),
+                    panelId: panelId
+                )
+            }
         }
         guard activeRemoteTerminalSurfaceIds.insert(panelId).inserted else { return }
         activeRemoteTerminalSessionCount = activeRemoteTerminalSurfaceIds.count
@@ -13532,6 +13566,24 @@ final class Workspace: Identifiable, ObservableObject {
             return nil
         }
         return trimmed
+    }
+
+    private func storeRemotePTYSessionID(_ sessionID: String, panelId: UUID) {
+        remotePTYSessionIDsByPanelId[panelId] = sessionID
+        updateExplicitRemotePTYSessionMarker(panelId: panelId, sessionID: sessionID)
+    }
+
+    private func updateExplicitRemotePTYSessionMarker(panelId: UUID, sessionID: String) {
+        if Self.parsedDefaultSSHPTYSessionID(sessionID) == nil {
+            explicitRemotePTYSessionSurfaceIds.insert(panelId)
+        } else {
+            explicitRemotePTYSessionSurfaceIds.remove(panelId)
+        }
+    }
+
+    private func clearFailedPersistentRemotePTYAttachState(panelId: UUID) {
+        failedPersistentRemotePTYAttachSurfaceIds.remove(panelId)
+        failedPersistentRemotePTYSessionIDsByPanelId.removeValue(forKey: panelId)
     }
 
     private nonisolated static let remoteRelayWorkspaceIDKeys: Set<String> = [
@@ -13772,6 +13824,9 @@ final class Workspace: Identifiable, ObservableObject {
         guard remoteConfiguration?.preserveAfterTerminalExit == true else {
             return nil
         }
+        guard !failedPersistentRemotePTYAttachSurfaceIds.contains(panelId) else {
+            return nil
+        }
         if let storedSessionID = normalizedRemotePTYSessionID(remotePTYSessionIDsByPanelId[panelId]) {
             return storedSessionID
         }
@@ -13828,6 +13883,8 @@ final class Workspace: Identifiable, ObservableObject {
     func discardRemotePTYSessionID(panelId: UUID) {
         remotePTYSessionIDsByPanelId.removeValue(forKey: panelId)
         endedPersistentRemotePTYAttachSurfaceIds.remove(panelId)
+        clearFailedPersistentRemotePTYAttachState(panelId: panelId)
+        explicitRemotePTYSessionSurfaceIds.remove(panelId)
         removeRemoteRelaySurfaceAliases(targeting: panelId)
     }
 
@@ -13836,16 +13893,29 @@ final class Workspace: Identifiable, ObservableObject {
               let normalizedSessionID = normalizedRemotePTYSessionID(sessionID) else {
             return false
         }
-        let expectedSessionID = normalizedRemotePTYSessionID(remotePTYSessionIDsByPanelId[panelId])
-            ?? Self.defaultSSHPTYSessionID(workspaceId: id, panelId: panelId)
+        guard let expectedSessionID = expectedRemotePTYSessionID(panelId: panelId) else {
+            return false
+        }
         return normalizedSessionID == expectedSessionID
+    }
+
+    private func expectedRemotePTYSessionID(panelId: UUID) -> String? {
+        if let storedSessionID = normalizedRemotePTYSessionID(remotePTYSessionIDsByPanelId[panelId]) {
+            return storedSessionID
+        }
+        if let failedSessionID = normalizedRemotePTYSessionID(failedPersistentRemotePTYSessionIDsByPanelId[panelId]) {
+            return failedSessionID
+        }
+        guard !explicitRemotePTYSessionSurfaceIds.contains(panelId) else {
+            return nil
+        }
+        return Self.defaultSSHPTYSessionID(workspaceId: id, panelId: panelId)
     }
 
     @discardableResult
     func markRemotePTYAttachEnded(surfaceId: UUID, sessionID: String) -> (clearedRemotePTYSession: Bool, untrackedRemoteTerminal: Bool) {
         let normalizedSessionID = normalizedRemotePTYSessionID(sessionID)
-        let expectedSessionID = normalizedRemotePTYSessionID(remotePTYSessionIDsByPanelId[surfaceId])
-            ?? Self.defaultSSHPTYSessionID(workspaceId: id, panelId: surfaceId)
+        let expectedSessionID = expectedRemotePTYSessionID(panelId: surfaceId)
         guard let normalizedSessionID, normalizedSessionID == expectedSessionID else {
             return (false, false)
         }
@@ -13856,6 +13926,8 @@ final class Workspace: Identifiable, ObservableObject {
         } else {
             endedPersistentRemotePTYAttachSurfaceIds.remove(surfaceId)
         }
+        clearFailedPersistentRemotePTYAttachState(panelId: surfaceId)
+        explicitRemotePTYSessionSurfaceIds.remove(surfaceId)
         remotePTYSessionIDsByPanelId.removeValue(forKey: surfaceId)
         removeRemoteRelaySurfaceAliases(targeting: surfaceId)
         untrackRemoteTerminalSurface(surfaceId)
@@ -13865,8 +13937,17 @@ final class Workspace: Identifiable, ObservableObject {
     func markPersistentRemotePTYAttachFailed(surfaceId: UUID) {
         guard remoteConfiguration?.preserveAfterTerminalExit == true else { return }
 
+        let recoverableSessionID =
+            normalizedRemotePTYSessionID(remotePTYSessionIDsByPanelId[surfaceId])
+            ?? normalizedRemotePTYSessionID(failedPersistentRemotePTYSessionIDsByPanelId[surfaceId])
+        if let recoverableSessionID {
+            failedPersistentRemotePTYSessionIDsByPanelId[surfaceId] = recoverableSessionID
+        } else {
+            failedPersistentRemotePTYSessionIDsByPanelId.removeValue(forKey: surfaceId)
+        }
         remotePTYSessionIDsByPanelId.removeValue(forKey: surfaceId)
         endedPersistentRemotePTYAttachSurfaceIds.remove(surfaceId)
+        failedPersistentRemotePTYAttachSurfaceIds.insert(surfaceId)
         removeRemoteRelaySurfaceAliases(targeting: surfaceId)
         pendingRemoteTerminalChildExitSurfaceIds.remove(surfaceId)
         transferredRemoteCleanupConfigurationsByPanelId.removeValue(forKey: surfaceId)
@@ -13876,6 +13957,117 @@ final class Workspace: Identifiable, ObservableObject {
         }
         syncRemotePortScanTTYs()
         applyBrowserRemoteWorkspaceStatusToPanels()
+    }
+
+    func markPersistentRemotePTYAttachChildExited(surfaceId: UUID) {
+        guard remoteConfiguration?.preserveAfterTerminalExit == true else { return }
+
+        if endedPersistentRemotePTYAttachSurfaceIds.remove(surfaceId) != nil {
+            clearFailedPersistentRemotePTYAttachState(panelId: surfaceId)
+            pendingRemoteTerminalChildExitSurfaceIds.remove(surfaceId)
+            transferredRemoteCleanupConfigurationsByPanelId.removeValue(forKey: surfaceId)
+            surfaceTTYNames.removeValue(forKey: surfaceId)
+            syncRemotePortScanTTYs()
+            applyBrowserRemoteWorkspaceStatusToPanels()
+            return
+        }
+
+        markPersistentRemotePTYAttachFailed(surfaceId: surfaceId)
+    }
+
+    @MainActor
+    func hasRecoverablePersistentRemotePTYAttachFailure(_ panelId: UUID) -> Bool {
+        failedPersistentRemotePTYAttachSurfaceIds.contains(panelId)
+    }
+
+    @MainActor
+    @discardableResult
+    func recoverRemoteOnUserActivation(reason: String) -> Bool {
+        guard let remoteConfiguration else { return false }
+
+        var didRecover = false
+        if remoteConnectionState == .error || remoteDaemonStatus.state == .error || hasProxyOnlyRemoteConnectionError {
+#if DEBUG
+            cmuxDebugLog(
+                "remote.activation.reconnect ws=\(id.uuidString.prefix(5)) reason=\(reason) " +
+                "state=\(remoteConnectionState.rawValue) daemon=\(remoteDaemonStatus.state.rawValue)"
+            )
+#endif
+            reconnectRemoteConnection()
+            didRecover = true
+        }
+
+        guard remoteConfiguration.preserveAfterTerminalExit else {
+            return didRecover
+        }
+
+        let failedSurfaceIds = failedPersistentRemotePTYAttachSurfaceIds
+            .sorted { $0.uuidString < $1.uuidString }
+        for panelId in failedSurfaceIds {
+            guard failedPersistentRemotePTYAttachSurfaceIds.contains(panelId) else { continue }
+            guard let terminalPanel = terminalPanel(for: panelId) else {
+                clearFailedPersistentRemotePTYAttachState(panelId: panelId)
+                explicitRemotePTYSessionSurfaceIds.remove(panelId)
+                continue
+            }
+
+            let shouldRespawn = terminalPanel.processExited || !activeRemoteTerminalSurfaceIds.contains(panelId)
+            guard shouldRespawn else { continue }
+            guard respawnPersistentRemoteTerminalSurface(panelId: panelId, reason: reason) != nil else {
+                continue
+            }
+            didRecover = true
+        }
+
+        return didRecover
+    }
+
+    @MainActor
+    @discardableResult
+    private func respawnPersistentRemoteTerminalSurface(panelId: UUID, reason: String) -> TerminalPanel? {
+        guard remoteConfiguration?.preserveAfterTerminalExit == true else { return nil }
+
+        let command: String
+        let commandMode: String
+        let sessionID: String? = {
+            guard explicitRemotePTYSessionSurfaceIds.contains(panelId) else { return nil }
+            return normalizedRemotePTYSessionID(failedPersistentRemotePTYSessionIDsByPanelId[panelId])
+                ?? normalizedRemotePTYSessionID(remotePTYSessionIDsByPanelId[panelId])
+        }()
+        if let sessionID {
+            command = remotePTYAttachStartupCommand(sessionID: sessionID)
+            commandMode = "reattach"
+        } else if let defaultCommand = remoteTerminalStartupCommand() {
+            command = defaultCommand
+            commandMode = "default"
+        } else {
+            return nil
+        }
+
+        guard let replacementPanel = respawnTerminalSurface(
+            panelId: panelId,
+            command: command,
+            focus: nil,
+            waitAfterCommand: true
+        ) else {
+            return nil
+        }
+
+        if let sessionID {
+            storeRemotePTYSessionID(sessionID, panelId: panelId)
+            registerRemoteRelayIDAliases(remotePTYSessionID: sessionID, restoredPanelId: panelId)
+        }
+        trackRemoteTerminalSurface(panelId)
+        syncRemotePortScanTTYs()
+        applyBrowserRemoteWorkspaceStatusToPanels()
+
+#if DEBUG
+        cmuxDebugLog(
+            "remote.activation.respawn ws=\(id.uuidString.prefix(5)) panel=\(panelId.uuidString.prefix(5)) " +
+            "reason=\(reason) mode=\(commandMode)"
+        )
+#endif
+        return replacementPanel
     }
 
     private func maybeDemoteRemoteWorkspaceAfterSSHSessionEnded() {
@@ -14099,7 +14291,7 @@ final class Workspace: Identifiable, ObservableObject {
         let preserveConnectedStateForRetry =
             (state == .connecting || state == .reconnecting) &&
                 preservesSSHTerminalConnection &&
-                hasProxyOnlyRemoteSidebarError
+                hasProxyOnlyRemoteConnectionError
         let effectiveState: WorkspaceRemoteConnectionState
         if state == .error && proxyOnlyError && preservesSSHTerminalConnection {
             effectiveState = .connected
@@ -14111,6 +14303,11 @@ final class Workspace: Identifiable, ObservableObject {
 
         remoteConnectionState = effectiveState
         remoteConnectionDetail = detail
+        if proxyOnlyError {
+            hasProxyOnlyRemoteConnectionError = true
+        } else if state == .connected || state == .disconnected || state == .error {
+            hasProxyOnlyRemoteConnectionError = false
+        }
         applyBrowserRemoteWorkspaceStatusToPanels()
 
         if let trimmedDetail, !trimmedDetail.isEmpty, (state == .error || proxyOnlyError) {
@@ -14534,7 +14731,7 @@ final class Workspace: Identifiable, ObservableObject {
         let normalizedRemotePTYSessionID = normalizedRemotePTYSessionID(remotePTYSessionID)
         let tracksRemoteTerminalSurface = remoteTerminalStartupCommand != nil || normalizedRemotePTYSessionID != nil
         if let normalizedRemotePTYSessionID {
-            remotePTYSessionIDsByPanelId[newPanel.id] = normalizedRemotePTYSessionID
+            storeRemotePTYSessionID(normalizedRemotePTYSessionID, panelId: newPanel.id)
             registerRemoteRelayIDAliases(remotePTYSessionID: normalizedRemotePTYSessionID, restoredPanelId: newPanel.id)
         }
         if tracksRemoteTerminalSurface {
@@ -14572,6 +14769,7 @@ final class Workspace: Identifiable, ObservableObject {
             panels.removeValue(forKey: newPanel.id)
             panelTitles.removeValue(forKey: newPanel.id)
             remotePTYSessionIDsByPanelId.removeValue(forKey: newPanel.id)
+            explicitRemotePTYSessionSurfaceIds.remove(newPanel.id)
             removeRemoteRelaySurfaceAliases(targeting: newPanel.id)
             surfaceIdToPanelId.removeValue(forKey: newTab.id)
             if tracksRemoteTerminalSurface {
@@ -14684,7 +14882,7 @@ final class Workspace: Identifiable, ObservableObject {
         let normalizedRemotePTYSessionID = normalizedRemotePTYSessionID(remotePTYSessionID)
         let tracksRemoteTerminalSurface = remoteTerminalStartupCommand != nil || normalizedRemotePTYSessionID != nil
         if let normalizedRemotePTYSessionID {
-            remotePTYSessionIDsByPanelId[newPanel.id] = normalizedRemotePTYSessionID
+            storeRemotePTYSessionID(normalizedRemotePTYSessionID, panelId: newPanel.id)
             registerRemoteRelayIDAliases(remotePTYSessionID: normalizedRemotePTYSessionID, restoredPanelId: newPanel.id)
         }
         if tracksRemoteTerminalSurface {
@@ -14704,6 +14902,7 @@ final class Workspace: Identifiable, ObservableObject {
             panels.removeValue(forKey: newPanel.id)
             panelTitles.removeValue(forKey: newPanel.id)
             remotePTYSessionIDsByPanelId.removeValue(forKey: newPanel.id)
+            explicitRemotePTYSessionSurfaceIds.remove(newPanel.id)
             removeRemoteRelaySurfaceAliases(targeting: newPanel.id)
             if tracksRemoteTerminalSurface {
                 untrackRemoteTerminalSurface(newPanel.id)
@@ -14750,7 +14949,8 @@ final class Workspace: Identifiable, ObservableObject {
         command: String,
         workingDirectory: String? = nil,
         tmuxStartCommand: String? = nil,
-        focus: Bool? = nil
+        focus: Bool? = nil,
+        waitAfterCommand: Bool = false
     ) -> TerminalPanel? {
         guard let oldPanel = terminalPanel(for: panelId),
               let tabId = surfaceIdFromPanelId(panelId),
@@ -14761,7 +14961,12 @@ final class Workspace: Identifiable, ObservableObject {
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCommand.isEmpty else { return nil }
 
-        let inheritedConfig = inheritedTerminalConfig(preferredPanelId: panelId, inPane: paneId)
+        var inheritedConfig = inheritedTerminalConfig(preferredPanelId: panelId, inPane: paneId)
+        if waitAfterCommand {
+            var template = inheritedConfig ?? CmuxSurfaceConfigTemplate()
+            template.waitAfterCommand = true
+            inheritedConfig = template
+        }
         let requestedWorkingDirectory: String? = {
             if let workingDirectory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines),
                !workingDirectory.isEmpty {
@@ -16355,9 +16560,10 @@ final class Workspace: Identifiable, ObservableObject {
         let didAdoptWorkspaceRemoteTracking = shouldAdoptDetachedWorkspaceRemoteTracking(detached)
         if didAdoptWorkspaceRemoteTracking,
            let remotePTYSessionID = normalizedRemotePTYSessionID(detached.remotePTYSessionID) {
-            remotePTYSessionIDsByPanelId[detached.panelId] = remotePTYSessionID
+            storeRemotePTYSessionID(remotePTYSessionID, panelId: detached.panelId)
         } else {
             remotePTYSessionIDsByPanelId.removeValue(forKey: detached.panelId)
+            explicitRemotePTYSessionSurfaceIds.remove(detached.panelId)
         }
         if didAdoptWorkspaceRemoteTracking {
             registerRemoteRelayIDAliases(

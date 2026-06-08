@@ -2434,6 +2434,218 @@ final class WorkspaceRemoteConnectionTests: XCTestCase {
     }
 
     @MainActor
+    func testActivationRecoveryReattachesFailedExplicitRemotePTYSessionID() throws {
+        let workspace = Workspace()
+        let config = WorkspaceRemoteConfiguration(
+            destination: "cmux-macmini",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: 64014,
+            relayID: String(repeating: "a", count: 16),
+            relayToken: String(repeating: "b", count: 64),
+            localSocketPath: "/tmp/cmux-debug-explicit-recover-test.sock",
+            terminalStartupCommand: nil,
+            preserveAfterTerminalExit: true
+        )
+        workspace.configureRemoteConnection(config, autoConnect: false)
+
+        let initialPanelID = try XCTUnwrap(workspace.focusedTerminalPanel?.id)
+        let paneID = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+        let sessionID = "explicit-recover-session"
+        let panel = try XCTUnwrap(
+            workspace.newTerminalSurface(
+                inPane: paneID,
+                focus: true,
+                initialCommand: "cmux ssh-pty-attach",
+                remotePTYSessionID: sessionID
+            )
+        )
+        let originalPanel = panel
+        XCTAssertTrue(workspace.closePanel(initialPanelID, force: true))
+
+        XCTAssertTrue(workspace.remotePTYSessionIDMatches(panelId: panel.id, sessionID: sessionID))
+        workspace.markPersistentRemotePTYAttachFailed(surfaceId: panel.id)
+
+        XCTAssertTrue(workspace.hasRecoverablePersistentRemotePTYAttachFailure(panel.id))
+        XCTAssertFalse(workspace.isRemoteTerminalSurface(panel.id))
+        XCTAssertNil(
+            workspace.sessionSnapshot(includeScrollback: false)
+                .panels.first { $0.id == panel.id }?.terminal?.remotePTYSessionID
+        )
+
+        XCTAssertTrue(workspace.recoverRemoteOnUserActivation(reason: "test.explicitRecover"))
+        let replacementPanel = try XCTUnwrap(workspace.panels[panel.id] as? TerminalPanel)
+        XCTAssertFalse(replacementPanel === originalPanel)
+        XCTAssertTrue(workspace.isRemoteTerminalSurface(panel.id))
+        XCTAssertFalse(workspace.hasRecoverablePersistentRemotePTYAttachFailure(panel.id))
+        XCTAssertTrue(replacementPanel.surface.initialCommand?.contains("--require-existing") ?? false)
+        XCTAssertTrue(replacementPanel.surface.initialCommand?.contains(sessionID) ?? false)
+        XCTAssertEqual(
+            workspace.sessionSnapshot(includeScrollback: false)
+                .panels.first { $0.id == panel.id }?.terminal?.remotePTYSessionID,
+            sessionID
+        )
+    }
+
+    @MainActor
+    func testActivationRecoveryUsesDefaultAttachForDefaultPatternRemotePTYSessionID() throws {
+        let workspace = Workspace()
+        let defaultAttachCommand = SSHPTYAttachStartupCommandBuilder.command(requireExisting: false)
+        let config = WorkspaceRemoteConfiguration(
+            destination: "cmux-macmini",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: 64034,
+            relayID: String(repeating: "a", count: 16),
+            relayToken: String(repeating: "b", count: 64),
+            localSocketPath: "/tmp/cmux-debug-default-pattern-recover-test.sock",
+            terminalStartupCommand: defaultAttachCommand,
+            preserveAfterTerminalExit: true,
+            persistentDaemonSlot: "ssh-default-pattern-recover-test"
+        )
+        workspace.configureRemoteConnection(config, autoConnect: false)
+
+        let initialPanelID = try XCTUnwrap(workspace.focusedTerminalPanel?.id)
+        let paneID = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+        let restoredDefaultSessionID = Workspace.defaultSSHPTYSessionID(
+            workspaceId: UUID(),
+            panelId: UUID()
+        )
+        let panel = try XCTUnwrap(
+            workspace.newTerminalSurface(
+                inPane: paneID,
+                focus: true,
+                initialCommand: Workspace.sshPTYAttachStartupCommand(sessionID: restoredDefaultSessionID),
+                remotePTYSessionID: restoredDefaultSessionID
+            )
+        )
+        XCTAssertTrue(workspace.closePanel(initialPanelID, force: true))
+
+        XCTAssertTrue(workspace.remotePTYSessionIDMatches(panelId: panel.id, sessionID: restoredDefaultSessionID))
+        workspace.markPersistentRemotePTYAttachFailed(surfaceId: panel.id)
+
+        XCTAssertTrue(workspace.hasRecoverablePersistentRemotePTYAttachFailure(panel.id))
+        XCTAssertFalse(workspace.isRemoteTerminalSurface(panel.id))
+        XCTAssertNil(
+            workspace.sessionSnapshot(includeScrollback: false)
+                .panels.first { $0.id == panel.id }?.terminal?.remotePTYSessionID
+        )
+
+        XCTAssertTrue(workspace.recoverRemoteOnUserActivation(reason: "test.defaultPatternRecover"))
+        let replacementPanel = try XCTUnwrap(workspace.panels[panel.id] as? TerminalPanel)
+        XCTAssertTrue(workspace.isRemoteTerminalSurface(panel.id))
+        XCTAssertFalse(workspace.hasRecoverablePersistentRemotePTYAttachFailure(panel.id))
+        XCTAssertEqual(replacementPanel.surface.initialCommand, defaultAttachCommand)
+        XCTAssertFalse(replacementPanel.surface.initialCommand?.contains("--require-existing") ?? true)
+        XCTAssertEqual(
+            workspace.sessionSnapshot(includeScrollback: false)
+                .panels.first { $0.id == panel.id }?.terminal?.remotePTYSessionID,
+            Workspace.defaultSSHPTYSessionID(workspaceId: workspace.id, panelId: panel.id)
+        )
+    }
+
+    @MainActor
+    func testLateAttachEndAfterFailedDefaultPatternRemotePTYSessionClearsRecoveryMarker() throws {
+        let workspace = Workspace()
+        let defaultAttachCommand = SSHPTYAttachStartupCommandBuilder.command(requireExisting: false)
+        let config = WorkspaceRemoteConfiguration(
+            destination: "cmux-macmini",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: 64035,
+            relayID: String(repeating: "a", count: 16),
+            relayToken: String(repeating: "b", count: 64),
+            localSocketPath: "/tmp/cmux-debug-default-pattern-late-end-test.sock",
+            terminalStartupCommand: defaultAttachCommand,
+            preserveAfterTerminalExit: true,
+            persistentDaemonSlot: "ssh-default-pattern-late-end-test"
+        )
+        workspace.configureRemoteConnection(config, autoConnect: false)
+
+        let initialPanelID = try XCTUnwrap(workspace.focusedTerminalPanel?.id)
+        let paneID = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+        let restoredDefaultSessionID = Workspace.defaultSSHPTYSessionID(
+            workspaceId: UUID(),
+            panelId: UUID()
+        )
+        let panel = try XCTUnwrap(
+            workspace.newTerminalSurface(
+                inPane: paneID,
+                focus: true,
+                initialCommand: Workspace.sshPTYAttachStartupCommand(sessionID: restoredDefaultSessionID),
+                remotePTYSessionID: restoredDefaultSessionID
+            )
+        )
+        XCTAssertTrue(workspace.closePanel(initialPanelID, force: true))
+
+        workspace.markPersistentRemotePTYAttachFailed(surfaceId: panel.id)
+        XCTAssertTrue(workspace.hasRecoverablePersistentRemotePTYAttachFailure(panel.id))
+        XCTAssertFalse(workspace.isRemoteTerminalSurface(panel.id))
+
+        let outcome = workspace.markRemotePTYAttachEnded(surfaceId: panel.id, sessionID: restoredDefaultSessionID)
+
+        XCTAssertTrue(outcome.clearedRemotePTYSession)
+        XCTAssertFalse(outcome.untrackedRemoteTerminal)
+        XCTAssertFalse(workspace.hasRecoverablePersistentRemotePTYAttachFailure(panel.id))
+        XCTAssertFalse(workspace.isRemoteTerminalSurface(panel.id))
+        XCTAssertFalse(workspace.recoverRemoteOnUserActivation(reason: "test.defaultPatternLateAttachEnd"))
+    }
+
+    @MainActor
+    func testLateAttachEndAfterFailedExplicitRemotePTYSessionClearsRecoveryMarker() throws {
+        let workspace = Workspace()
+        let config = WorkspaceRemoteConfiguration(
+            destination: "cmux-macmini",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: 64015,
+            relayID: String(repeating: "a", count: 16),
+            relayToken: String(repeating: "b", count: 64),
+            localSocketPath: "/tmp/cmux-debug-explicit-late-end-test.sock",
+            terminalStartupCommand: nil,
+            preserveAfterTerminalExit: true
+        )
+        workspace.configureRemoteConnection(config, autoConnect: false)
+
+        let initialPanelID = try XCTUnwrap(workspace.focusedTerminalPanel?.id)
+        let paneID = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+        let sessionID = "explicit-late-end-session"
+        let panel = try XCTUnwrap(
+            workspace.newTerminalSurface(
+                inPane: paneID,
+                focus: true,
+                initialCommand: "cmux ssh-pty-attach",
+                remotePTYSessionID: sessionID
+            )
+        )
+        XCTAssertTrue(workspace.closePanel(initialPanelID, force: true))
+
+        workspace.markPersistentRemotePTYAttachFailed(surfaceId: panel.id)
+        XCTAssertTrue(workspace.hasRecoverablePersistentRemotePTYAttachFailure(panel.id))
+        XCTAssertFalse(workspace.isRemoteTerminalSurface(panel.id))
+
+        let outcome = workspace.markRemotePTYAttachEnded(surfaceId: panel.id, sessionID: sessionID)
+
+        XCTAssertTrue(outcome.clearedRemotePTYSession)
+        XCTAssertFalse(outcome.untrackedRemoteTerminal)
+        XCTAssertFalse(workspace.hasRecoverablePersistentRemotePTYAttachFailure(panel.id))
+        XCTAssertFalse(workspace.isRemoteTerminalSurface(panel.id))
+        XCTAssertFalse(workspace.recoverRemoteOnUserActivation(reason: "test.explicitLateAttachEnd"))
+        XCTAssertNil(
+            workspace.sessionSnapshot(includeScrollback: false)
+                .panels.first { $0.id == panel.id }?.terminal?.remotePTYSessionID
+        )
+    }
+
+    @MainActor
     func testRemoteReconfigureClearsExplicitRemotePTYSessionIDForTrackedSurface() throws {
         let workspace = Workspace()
         let originalConfig = WorkspaceRemoteConfiguration(
@@ -3234,6 +3446,64 @@ final class WorkspaceRemoteConnectionTests: XCTestCase {
             ((workspace.remoteStatusPayload()["proxy"] as? [String: Any])?["state"] as? String),
             "unavailable"
         )
+    }
+
+    @MainActor
+    func testActivationRecoveryReconnectsProxyOnlyRemoteError() {
+        let workspace = Workspace()
+        let config = WorkspaceRemoteConfiguration(
+            destination: "cmux-macmini",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: 64007,
+            relayID: String(repeating: "a", count: 16),
+            relayToken: String(repeating: "b", count: 64),
+            localSocketPath: "/tmp/cmux-debug-test.sock",
+            terminalStartupCommand: "ssh cmux-macmini"
+        )
+        var reconnectedWorkspaceIds: [UUID] = []
+        Workspace.reconnectRemoteConnectionOverrideForTesting = { workspace in
+            reconnectedWorkspaceIds.append(workspace.id)
+        }
+        defer { Workspace.reconnectRemoteConnectionOverrideForTesting = nil }
+
+        workspace.configureRemoteConnection(config, autoConnect: false)
+        let proxyError = "Remote proxy to cmux-macmini unavailable: Failed to start local daemon proxy: daemon RPC timeout waiting for hello response (retry in 3s)"
+        workspace.applyRemoteConnectionStateUpdate(.error, detail: proxyError, target: "cmux-macmini")
+
+        XCTAssertEqual(workspace.remoteConnectionState, .connected)
+        XCTAssertTrue(workspace.recoverRemoteOnUserActivation(reason: "test.proxyOnly"))
+        XCTAssertEqual(reconnectedWorkspaceIds, [workspace.id])
+    }
+
+    @MainActor
+    func testActivationRecoveryDoesNotReconnectDisconnectedRemote() {
+        let workspace = Workspace()
+        let config = WorkspaceRemoteConfiguration(
+            destination: "cmux-macmini",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: 64007,
+            relayID: String(repeating: "a", count: 16),
+            relayToken: String(repeating: "b", count: 64),
+            localSocketPath: "/tmp/cmux-debug-test.sock",
+            terminalStartupCommand: "ssh cmux-macmini"
+        )
+        var reconnectCount = 0
+        Workspace.reconnectRemoteConnectionOverrideForTesting = { _ in
+            reconnectCount += 1
+        }
+        defer { Workspace.reconnectRemoteConnectionOverrideForTesting = nil }
+
+        workspace.configureRemoteConnection(config, autoConnect: false)
+
+        XCTAssertEqual(workspace.remoteConnectionState, .disconnected)
+        XCTAssertFalse(workspace.recoverRemoteOnUserActivation(reason: "test.disconnected"))
+        XCTAssertEqual(reconnectCount, 0)
     }
 }
 
