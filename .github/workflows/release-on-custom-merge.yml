@@ -228,7 +228,7 @@ jobs:
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
         with:
           path: .spm-cache
-          key: spm-${{ hashFiles('GhosttyTabs.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: spm-${{ hashFiles('cmux.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-
 
       - name: Setup Go
@@ -240,7 +240,7 @@ jobs:
         id: build_version
         run: |
           set -euo pipefail
-          BASE_BUILD_NUMBER="$(grep -m1 'CURRENT_PROJECT_VERSION = ' GhosttyTabs.xcodeproj/project.pbxproj | sed 's/.*= //;s/;.*//')"
+          BASE_BUILD_NUMBER="$(grep -m1 'CURRENT_PROJECT_VERSION = ' cmux.xcodeproj/project.pbxproj | sed 's/.*= //;s/;.*//')"
           FORK_SUFFIX="${FORK_TAG##*-fork.}"
           if ! [[ "${BASE_BUILD_NUMBER}" =~ ^[0-9]+$ && "${FORK_SUFFIX}" =~ ^[0-9]+$ ]]; then
             echo "Unable to compute fork Sparkle build number" >&2
