@@ -6897,7 +6897,8 @@ final class TerminalSurface: Identifiable, ObservableObject {
         xScale: CGFloat,
         yScale: CGFloat,
         layerScale: CGFloat,
-        backingSize: CGSize? = nil
+        backingSize: CGSize? = nil,
+        force: Bool = false
     ) -> Bool {
         guard let surface = liveSurfaceForGhosttyAccess(reason: "updateSize") else { return false }
         _ = layerScale
@@ -6929,7 +6930,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             )
         }
 
-        guard scaleChanged || sizeChanged else { return false }
+        guard force || scaleChanged || sizeChanged else { return false }
 
         #if DEBUG
         if sizeChanged {
@@ -6938,13 +6939,13 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
         #endif
 
-        if scaleChanged {
+        if force || scaleChanged {
             ghostty_surface_set_content_scale(surface, xScale, yScale)
             lastXScale = xScale
             lastYScale = yScale
         }
 
-        if sizeChanged {
+        if force || sizeChanged {
             ghostty_surface_set_size(surface, wpx, hpx)
             lastPixelWidth = wpx
             lastPixelHeight = hpx
@@ -7112,7 +7113,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
     /// Force a full size recalculation and surface redraw.
     @MainActor
-    func forceRefresh(reason: String = "unspecified") {
+    func forceRefresh(reason: String = "unspecified", forceGeometry: Bool = false) {
 #if DEBUG
         let hasSurface = surface != nil
         let viewState: String
@@ -7157,7 +7158,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             ghostty_surface_set_display_id(currentSurface, displayID)
         }
 
-        view.forceRefreshSurface()
+        view.forceRefreshSurface(forceGeometry: forceGeometry)
 #if DEBUG
         let refreshReason = "forceRefresh.refresh.\(reason)"
 #else
@@ -8827,7 +8828,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     @discardableResult
-    private func updateSurfaceSize(size: CGSize? = nil) -> Bool {
+    private func updateSurfaceSize(size: CGSize? = nil, forceGeometry: Bool = false) -> Bool {
         guard let terminalSurface = terminalSurface else { return false }
         let size = resolvedSurfaceSize(preferred: size)
         guard size.width > 0 && size.height > 0 else {
@@ -8913,20 +8914,22 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        if forceGeometry {
+            didChange = true
+        }
         if let layer, !nearlyEqual(layer.contentsScale, layerScale) {
             didChange = true
         }
         layer?.contentsScale = layerScale
         layer?.masksToBounds = true
         if let metalLayer = layer as? CAMetalLayer {
-            if drawablePixelSize != lastDrawableSize || metalLayer.drawableSize != drawablePixelSize {
-                if metalLayer.drawableSize != drawablePixelSize {
-                    didChange = true
-                }
-                if metalLayer.drawableSize != drawablePixelSize {
-                    metalLayer.drawableSize = drawablePixelSize
-                }
-                lastDrawableSize = drawablePixelSize
+            if Self.reconcileMetalDrawableSize(
+                metalLayer,
+                drawablePixelSize: drawablePixelSize,
+                lastDrawableSize: &lastDrawableSize,
+                forceGeometry: forceGeometry
+            ) {
+                didChange = true
             }
         }
         CATransaction.commit()
@@ -8937,14 +8940,15 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             xScale: xScale,
             yScale: yScale,
             layerScale: layerScale,
-            backingSize: backingSize
+            backingSize: backingSize,
+            force: forceGeometry
         )
         return didChange || surfaceSizeChanged
     }
 
     @discardableResult
-    fileprivate func pushTargetSurfaceSize(_ size: CGSize) -> Bool {
-        updateSurfaceSize(size: size)
+    fileprivate func pushTargetSurfaceSize(_ size: CGSize, forceGeometry: Bool = false) -> Bool {
+        updateSurfaceSize(size: size, forceGeometry: forceGeometry)
     }
 
 #if DEBUG
@@ -8957,12 +8961,33 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     /// Keep the drawable-size cache intact so redundant refresh paths do not
     /// reallocate Metal drawables when the pixel size is unchanged.
     @discardableResult
-    func forceRefreshSurface() -> Bool {
-        updateSurfaceSize()
+    func forceRefreshSurface(forceGeometry: Bool = false) -> Bool {
+        updateSurfaceSize(forceGeometry: forceGeometry)
     }
 
     private func nearlyEqual(_ lhs: CGFloat, _ rhs: CGFloat, epsilon: CGFloat = 0.0001) -> Bool {
         abs(lhs - rhs) <= epsilon
+    }
+
+    @discardableResult
+    static func reconcileMetalDrawableSize(
+        _ metalLayer: CAMetalLayer,
+        drawablePixelSize: CGSize,
+        lastDrawableSize: inout CGSize,
+        forceGeometry: Bool
+    ) -> Bool {
+        guard forceGeometry ||
+            drawablePixelSize != lastDrawableSize ||
+            metalLayer.drawableSize != drawablePixelSize else {
+            return false
+        }
+
+        let shouldSetDrawableSize = forceGeometry || metalLayer.drawableSize != drawablePixelSize
+        if shouldSetDrawableSize {
+            metalLayer.drawableSize = drawablePixelSize
+        }
+        lastDrawableSize = drawablePixelSize
+        return shouldSetDrawableSize
     }
 
     func expectedPixelSize(for pointsSize: CGSize) -> CGSize {
@@ -12417,6 +12442,7 @@ final class GhosttySurfaceScrollView: NSView {
     private var pendingDropZone: DropZone?
     private var dropZoneOverlayAnimationGeneration: UInt64 = 0
     private var pendingAutomaticFirstResponderApply = false
+    private var settledGeometryRefreshGeneration: UInt64 = 0
     // Intentionally no focus retry loops: rely on AppKit first-responder and bonsplit selection.
 
     /// Tracks whether keyboard focus should go to the search field or the terminal
@@ -13023,7 +13049,11 @@ final class GhosttySurfaceScrollView: NSView {
 
     /// Request an immediate terminal redraw after geometry updates so stale IOSurface
     /// contents do not remain stretched during live resize churn.
-    func refreshSurfaceNow(reason: String = "portal.refreshSurfaceNow") {
+    func refreshSurfaceNow(
+        reason: String = "portal.refreshSurfaceNow",
+        forceGeometry: Bool = false,
+        scheduleSettledRefresh: Bool = false
+    ) {
         // Portal reparent/reveal can settle geometry a tick before AppKit finishes
         // realizing the terminal subtree's backing layer state. Flush display for the
         // hosted subtree first so forceRefresh does not race a still-unrealized layer.
@@ -13031,7 +13061,33 @@ final class GhosttySurfaceScrollView: NSView {
         surfaceView.layoutSubtreeIfNeeded()
         displayIfNeeded()
         surfaceView.displayIfNeeded()
-        surfaceView.terminalSurface?.forceRefresh(reason: reason)
+        surfaceView.terminalSurface?.forceRefresh(reason: reason, forceGeometry: forceGeometry)
+        if scheduleSettledRefresh {
+            scheduleSettledGeometryRefresh(reason: reason)
+        }
+    }
+
+    func scheduleSettledGeometryRefresh(reason: String) {
+        settledGeometryRefreshGeneration &+= 1
+        let generation = settledGeometryRefreshGeneration
+        for delay in [0.05, 0.2] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self,
+                      self.settledGeometryRefreshGeneration == generation,
+                      !self.isHidden,
+                      self.window != nil,
+                      self.bounds.width > 1,
+                      self.bounds.height > 1 else {
+                    return
+                }
+                self.reconcileGeometryNow()
+                self.refreshSurfaceNow(
+                    reason: "\(reason).settled",
+                    forceGeometry: true,
+                    scheduleSettledRefresh: false
+                )
+            }
+        }
     }
 
     @discardableResult
@@ -14014,7 +14070,7 @@ final class GhosttySurfaceScrollView: NSView {
             // Workspace/sidebar selection can make an already-sized terminal visible again
             // without a portal frame delta or a focus handoff. Reuse the portal refresh
             // path so the Metal layer is nudged immediately on plain visibility restores.
-            refreshSurfaceNow(reason: "setVisibleInUI")
+            refreshSurfaceNow(reason: "setVisibleInUI", forceGeometry: true, scheduleSettledRefresh: true)
             scheduleAutomaticFirstResponderApply(reason: "setVisibleInUI")
         }
     }

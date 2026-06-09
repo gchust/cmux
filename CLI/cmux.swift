@@ -10231,7 +10231,9 @@ struct CMUXCLI {
 
         let rawMode = TerminalRawMode()
         defer { rawMode?.restore() }
+        let resizeQueue = DispatchQueue(label: "com.cmux.ssh-pty.resize")
         let resizeSource = startSSHPTYResizeSource(
+            queue: resizeQueue,
             client: client,
             workspaceId: workspaceId,
             surfaceID: surfaceID,
@@ -10241,6 +10243,27 @@ struct CMUXCLI {
             socketLock: controlSocketLock
         )
         defer { resizeSource.cancel() }
+        enqueueCurrentSSHPTYResize(
+            queue: resizeQueue,
+            client: client,
+            workspaceId: workspaceId,
+            surfaceID: surfaceID,
+            sessionID: sessionID,
+            attachmentID: attachmentID,
+            attachmentToken: attachmentToken,
+            socketLock: controlSocketLock
+        )
+        let settledResizeSource = startSSHPTYSettledResizeSource(
+            queue: resizeQueue,
+            client: client,
+            workspaceId: workspaceId,
+            surfaceID: surfaceID,
+            sessionID: sessionID,
+            attachmentID: attachmentID,
+            attachmentToken: attachmentToken,
+            socketLock: controlSocketLock
+        )
+        defer { settledResizeSource.cancel() }
 
         DispatchQueue.global(qos: .userInteractive).async {
             var buffer = [UInt8](repeating: 0, count: 8192)
@@ -10270,6 +10293,8 @@ struct CMUXCLI {
                 FileHandle.standardOutput.write(Data(outputBuffer.prefix(count)))
             } else if count == 0 {
                 resizeSource.cancel()
+                settledResizeSource.cancel()
+                resizeQueue.sync {}
                 try handleSSHPTYBridgeEOF(
                     client: client,
                     workspaceId: workspaceId,
@@ -10283,6 +10308,8 @@ struct CMUXCLI {
             } else if errno != EINTR {
                 if sshPTYBridgeReadErrorIsEOF(errno) {
                     resizeSource.cancel()
+                    settledResizeSource.cancel()
+                    resizeQueue.sync {}
                     try handleSSHPTYBridgeEOF(
                         client: client,
                         workspaceId: workspaceId,
@@ -10520,6 +10547,7 @@ struct CMUXCLI {
     }
 
     private func startSSHPTYResizeSource(
+        queue: DispatchQueue,
         client: SocketClient,
         workspaceId: String,
         surfaceID: String?,
@@ -10531,28 +10559,100 @@ struct CMUXCLI {
         signal(SIGWINCH, SIG_IGN)
         let source = DispatchSource.makeSignalSource(
             signal: SIGWINCH,
-            queue: DispatchQueue(label: "com.cmux.ssh-pty.resize")
+            queue: queue
         )
         source.setEventHandler {
-            let size = self.currentCLITerminalSize()
-            socketLock.lock()
-            defer { socketLock.unlock() }
-            var params: [String: Any] = [
-                "workspace_id": workspaceId,
-                "session_id": sessionID,
-                "attachment_id": attachmentID,
-                "attachment_token": attachmentToken,
-                "cols": size.cols,
-                "rows": size.rows,
-            ]
-            if let surfaceID {
-                params["surface_id"] = surfaceID
-                params["allow_moved_surface"] = true
-            }
-            _ = try? client.sendV2(method: "workspace.remote.pty_resize", params: params)
+            self.sendCurrentSSHPTYResize(
+                client: client,
+                workspaceId: workspaceId,
+                surfaceID: surfaceID,
+                sessionID: sessionID,
+                attachmentID: attachmentID,
+                attachmentToken: attachmentToken,
+                socketLock: socketLock
+            )
         }
         source.resume()
         return source
+    }
+
+    private func startSSHPTYSettledResizeSource(
+        queue: DispatchQueue,
+        client: SocketClient,
+        workspaceId: String,
+        surfaceID: String?,
+        sessionID: String,
+        attachmentID: String,
+        attachmentToken: String,
+        socketLock: NSLock
+    ) -> DispatchSourceTimer {
+        let source = DispatchSource.makeTimerSource(
+            queue: queue
+        )
+        source.schedule(deadline: .now() + .milliseconds(120))
+        source.setEventHandler {
+            self.sendCurrentSSHPTYResize(
+                client: client,
+                workspaceId: workspaceId,
+                surfaceID: surfaceID,
+                sessionID: sessionID,
+                attachmentID: attachmentID,
+                attachmentToken: attachmentToken,
+                socketLock: socketLock
+            )
+        }
+        source.resume()
+        return source
+    }
+
+    private func enqueueCurrentSSHPTYResize(
+        queue: DispatchQueue,
+        client: SocketClient,
+        workspaceId: String,
+        surfaceID: String?,
+        sessionID: String,
+        attachmentID: String,
+        attachmentToken: String,
+        socketLock: NSLock
+    ) {
+        queue.async {
+            self.sendCurrentSSHPTYResize(
+                client: client,
+                workspaceId: workspaceId,
+                surfaceID: surfaceID,
+                sessionID: sessionID,
+                attachmentID: attachmentID,
+                attachmentToken: attachmentToken,
+                socketLock: socketLock
+            )
+        }
+    }
+
+    private func sendCurrentSSHPTYResize(
+        client: SocketClient,
+        workspaceId: String,
+        surfaceID: String?,
+        sessionID: String,
+        attachmentID: String,
+        attachmentToken: String,
+        socketLock: NSLock
+    ) {
+        let size = currentCLITerminalSize()
+        socketLock.lock()
+        defer { socketLock.unlock() }
+        var params: [String: Any] = [
+            "workspace_id": workspaceId,
+            "session_id": sessionID,
+            "attachment_id": attachmentID,
+            "attachment_token": attachmentToken,
+            "cols": size.cols,
+            "rows": size.rows,
+        ]
+        if let surfaceID {
+            params["surface_id"] = surfaceID
+            params["allow_moved_surface"] = true
+        }
+        _ = try? client.sendV2(method: "workspace.remote.pty_resize", params: params)
     }
 
     private func connectLoopbackTCP(host: String, port: Int) throws -> Int32 {

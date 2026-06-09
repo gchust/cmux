@@ -3420,6 +3420,578 @@ final class CLINotifyProcessIntegrationRegressionTests: XCTestCase {
         XCTAssertEqual(capturedHandshake?["rows"] as? Int, 43)
     }
 
+    func testSSHPTYAttachSendsResizeAfterBridgeReadyWithoutSIGWINCH() throws {
+        let cliPath = try bundledCLIPath()
+        let socketPath = makeSocketPath("sshptyreadyresize")
+        let listenerFD = try bindUnixSocket(at: socketPath)
+        let bridge = try bindLoopbackTCP()
+        let state = MockSocketServerState()
+        let workspaceId = "22222222-2222-2222-2222-222222222222"
+        let surfaceId = "33333333-3333-3333-3333-333333333333"
+        let sessionId = "ssh-\(workspaceId)-\(surfaceId)"
+        let token = "bridge-token"
+        let resizeReceived = DispatchSemaphore(value: 0)
+        let allowBridgeClose = DispatchSemaphore(value: 0)
+        let resizeLock = NSLock()
+        var resizePayload: [String: Any]?
+        var masterFD: Int32 = -1
+        var slaveFD: Int32 = -1
+
+        defer {
+            if masterFD >= 0 { Darwin.close(masterFD) }
+            if slaveFD >= 0 { Darwin.close(slaveFD) }
+            Darwin.close(listenerFD)
+            Darwin.close(bridge.fd)
+            unlink(socketPath)
+        }
+
+        guard openpty(&masterFD, &slaveFD, nil, nil, nil) == 0 else {
+            throw NSError(domain: "cmux.tests", code: Int(errno), userInfo: [
+                NSLocalizedDescriptionKey: "openpty failed: \(String(cString: strerror(errno)))",
+            ])
+        }
+
+        var size = winsize(
+            ws_row: 37,
+            ws_col: 118,
+            ws_xpixel: 0,
+            ws_ypixel: 0
+        )
+        guard ioctl(masterFD, TIOCSWINSZ, &size) == 0 else {
+            throw NSError(domain: "cmux.tests", code: Int(errno), userInfo: [
+                NSLocalizedDescriptionKey: "TIOCSWINSZ failed: \(String(cString: strerror(errno)))",
+            ])
+        }
+
+        let socketHandled = startMockServer(listenerFD: listenerFD, state: state) { line in
+            guard let payload = self.jsonObject(line),
+                  let id = payload["id"] as? String,
+                  let method = payload["method"] as? String else {
+                return self.malformedRequestResponse(raw: line)
+            }
+            switch method {
+            case "workspace.remote.pty_bridge":
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "host": "127.0.0.1",
+                        "port": bridge.port,
+                        "token": token,
+                        "session_id": sessionId,
+                        "attachment_id": surfaceId,
+                    ]
+                )
+            case "workspace.remote.pty_resize":
+                let params = payload["params"] as? [String: Any] ?? [:]
+                resizeLock.lock()
+                resizePayload = params
+                resizeLock.unlock()
+                resizeReceived.signal()
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "workspace_id": workspaceId,
+                        "surface_id": surfaceId,
+                        "session_id": sessionId,
+                        "attachment_id": surfaceId,
+                        "resized": true,
+                    ]
+                )
+            case "workspace.remote.pty_sessions":
+                return self.v2Response(id: id, ok: true, result: ["sessions": []])
+            case "workspace.remote.pty_attach_end":
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "workspace_id": workspaceId,
+                        "surface_id": surfaceId,
+                        "session_id": sessionId,
+                        "cleared_remote_pty_session": true,
+                    ]
+                )
+            default:
+                return self.v2Response(
+                    id: id,
+                    ok: false,
+                    error: ["code": "unexpected_method", "message": "Unexpected method \(method)"]
+                )
+            }
+        }
+
+        let bridgeHandled = expectation(description: "bridge stayed open until ready resize")
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { bridgeHandled.fulfill() }
+            var clientAddr = sockaddr_in()
+            var clientAddrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let clientFD = withUnsafeMutablePointer(to: &clientAddr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                    Darwin.accept(bridge.fd, sockaddrPtr, &clientAddrLen)
+                }
+            }
+            guard clientFD >= 0 else { return }
+            defer { Darwin.close(clientFD) }
+
+            var pending = Data()
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while !pending.contains(0x0A) {
+                let count = Darwin.read(clientFD, &buffer, buffer.count)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    return
+                }
+                if count == 0 { return }
+                pending.append(buffer, count: count)
+            }
+
+            let ready = #"{"type":"ready","attachment_token":"attach-token"}"# + "\n"
+            _ = ready.withCString { ptr in
+                Darwin.write(clientFD, ptr, strlen(ptr))
+            }
+            _ = allowBridgeClose.wait(timeout: .now() + 5)
+        }
+
+        let process = Process()
+        let stderrPipe = Pipe()
+        let slaveHandle = FileHandle(fileDescriptor: slaveFD, closeOnDealloc: true)
+        slaveFD = -1
+        process.executableURL = URL(fileURLWithPath: cliPath)
+        process.arguments = [
+            "ssh-pty-attach",
+            "--workspace", workspaceId,
+            "--session-id", sessionId,
+            "--attachment-id", surfaceId,
+        ]
+        var environment = ProcessInfo.processInfo.environment
+        environment["CMUX_SOCKET_PATH"] = socketPath
+        environment["CMUX_CLI_SENTRY_DISABLED"] = "1"
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = slaveHandle
+        process.standardError = stderrPipe
+
+        try process.run()
+        slaveHandle.closeFile()
+        XCTAssertEqual(resizeReceived.wait(timeout: .now() + 5), .success)
+        allowBridgeClose.signal()
+
+        let exited = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            process.waitUntilExit()
+            exited.signal()
+        }
+        XCTAssertEqual(exited.wait(timeout: .now() + 5), .success)
+        wait(for: [socketHandled, bridgeHandled], timeout: 5)
+
+        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, stderr)
+        resizeLock.lock()
+        let capturedResize = resizePayload
+        resizeLock.unlock()
+        XCTAssertEqual(capturedResize?["workspace_id"] as? String, workspaceId)
+        XCTAssertEqual(capturedResize?["surface_id"] as? String, surfaceId)
+        XCTAssertEqual(capturedResize?["session_id"] as? String, sessionId)
+        XCTAssertEqual(capturedResize?["attachment_id"] as? String, surfaceId)
+        XCTAssertEqual(capturedResize?["attachment_token"] as? String, "attach-token")
+        XCTAssertEqual(capturedResize?["cols"] as? Int, 118)
+        XCTAssertEqual(capturedResize?["rows"] as? Int, 37)
+    }
+
+    func testSSHPTYAttachDoesNotBlockBridgeOutputOnReadyResizeResponse() throws {
+        let cliPath = try bundledCLIPath()
+        let socketPath = makeSocketPath("sshptyreadyresizeasync")
+        let listenerFD = try bindUnixSocket(at: socketPath)
+        let bridge = try bindLoopbackTCP()
+        let state = MockSocketServerState()
+        let workspaceId = "22222222-2222-2222-2222-222222222222"
+        let surfaceId = "33333333-3333-3333-3333-333333333333"
+        let sessionId = "ssh-\(workspaceId)-\(surfaceId)"
+        let token = "bridge-token"
+        let marker = "bridge-output-before-resize-response\n"
+        let markerData = Data(marker.utf8)
+        let resizeRequestReceived = DispatchSemaphore(value: 0)
+        let bridgeMayWriteOutput = DispatchSemaphore(value: 0)
+        let allowResizeResponse = DispatchSemaphore(value: 0)
+        let allowBridgeClose = DispatchSemaphore(value: 0)
+        let stdoutReceived = DispatchSemaphore(value: 0)
+        let stdoutLock = NSLock()
+        var stdoutData = Data()
+
+        defer {
+            Darwin.close(listenerFD)
+            Darwin.close(bridge.fd)
+            unlink(socketPath)
+        }
+
+        let socketHandled = startMockServer(listenerFD: listenerFD, state: state) { line in
+            guard let payload = self.jsonObject(line),
+                  let id = payload["id"] as? String,
+                  let method = payload["method"] as? String else {
+                return self.malformedRequestResponse(raw: line)
+            }
+            switch method {
+            case "workspace.remote.pty_bridge":
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "host": "127.0.0.1",
+                        "port": bridge.port,
+                        "token": token,
+                        "session_id": sessionId,
+                        "attachment_id": surfaceId,
+                    ]
+                )
+            case "workspace.remote.pty_resize":
+                resizeRequestReceived.signal()
+                bridgeMayWriteOutput.signal()
+                _ = allowResizeResponse.wait(timeout: .now() + 5)
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "workspace_id": workspaceId,
+                        "surface_id": surfaceId,
+                        "session_id": sessionId,
+                        "attachment_id": surfaceId,
+                        "resized": true,
+                    ]
+                )
+            case "workspace.remote.pty_sessions":
+                return self.v2Response(id: id, ok: true, result: ["sessions": []])
+            case "workspace.remote.pty_attach_end":
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "workspace_id": workspaceId,
+                        "surface_id": surfaceId,
+                        "session_id": sessionId,
+                        "cleared_remote_pty_session": true,
+                    ]
+                )
+            default:
+                return self.v2Response(
+                    id: id,
+                    ok: false,
+                    error: ["code": "unexpected_method", "message": "Unexpected method \(method)"]
+                )
+            }
+        }
+
+        let bridgeHandled = expectation(description: "bridge output forwarded while resize response is held")
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { bridgeHandled.fulfill() }
+            var clientAddr = sockaddr_in()
+            var clientAddrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let clientFD = withUnsafeMutablePointer(to: &clientAddr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                    Darwin.accept(bridge.fd, sockaddrPtr, &clientAddrLen)
+                }
+            }
+            guard clientFD >= 0 else { return }
+            defer { Darwin.close(clientFD) }
+
+            var pending = Data()
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while !pending.contains(0x0A) {
+                let count = Darwin.read(clientFD, &buffer, buffer.count)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    return
+                }
+                if count == 0 { return }
+                pending.append(buffer, count: count)
+            }
+
+            let ready = #"{"type":"ready","attachment_token":"attach-token"}"# + "\n"
+            _ = ready.withCString { ptr in
+                Darwin.write(clientFD, ptr, strlen(ptr))
+            }
+            guard bridgeMayWriteOutput.wait(timeout: .now() + 5) == .success else { return }
+            _ = marker.withCString { ptr in
+                Darwin.write(clientFD, ptr, strlen(ptr))
+            }
+            _ = allowBridgeClose.wait(timeout: .now() + 5)
+        }
+
+        let process = Process()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            stdoutLock.lock()
+            stdoutData.append(data)
+            let sawMarker = stdoutData.range(of: markerData) != nil
+            stdoutLock.unlock()
+            if sawMarker {
+                stdoutReceived.signal()
+            }
+        }
+        defer {
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        }
+
+        process.executableURL = URL(fileURLWithPath: cliPath)
+        process.arguments = [
+            "ssh-pty-attach",
+            "--workspace", workspaceId,
+            "--session-id", sessionId,
+            "--attachment-id", surfaceId,
+        ]
+        var environment = ProcessInfo.processInfo.environment
+        environment["CMUX_SOCKET_PATH"] = socketPath
+        environment["CMUX_CLI_SENTRY_DISABLED"] = "1"
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+        defer {
+            for _ in 0..<4 {
+                allowResizeResponse.signal()
+            }
+            allowBridgeClose.signal()
+            if process.isRunning {
+                process.terminate()
+            }
+        }
+
+        XCTAssertEqual(resizeRequestReceived.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(
+            stdoutReceived.wait(timeout: .now() + 2),
+            .success,
+            "ssh-pty-attach must start bridge output forwarding before the ready resize response is released"
+        )
+        for _ in 0..<4 {
+            allowResizeResponse.signal()
+        }
+        allowBridgeClose.signal()
+
+        let exited = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            process.waitUntilExit()
+            exited.signal()
+        }
+        XCTAssertEqual(exited.wait(timeout: .now() + 5), .success)
+        wait(for: [socketHandled, bridgeHandled], timeout: 5)
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stdoutLock.lock()
+        stdoutData.append(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+        stdoutLock.unlock()
+        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, stderr)
+        XCTAssertEqual(stdout, marker)
+    }
+
+    func testSSHPTYAttachSettledResizeUsesUpdatedSizeWithoutSIGWINCH() throws {
+        let cliPath = try bundledCLIPath()
+        let socketPath = makeSocketPath("sshptysettledresize")
+        let listenerFD = try bindUnixSocket(at: socketPath)
+        let bridge = try bindLoopbackTCP()
+        let state = MockSocketServerState()
+        let workspaceId = "22222222-2222-2222-2222-222222222222"
+        let surfaceId = "33333333-3333-3333-3333-333333333333"
+        let sessionId = "ssh-\(workspaceId)-\(surfaceId)"
+        let token = "bridge-token"
+        let firstResizeReceived = DispatchSemaphore(value: 0)
+        let secondResizeReceived = DispatchSemaphore(value: 0)
+        let allowBridgeClose = DispatchSemaphore(value: 0)
+        let resizeLock = NSLock()
+        var resizePayloads: [[String: Any]] = []
+        var masterFD: Int32 = -1
+        var slaveFD: Int32 = -1
+
+        func setPTYSize(cols: Int, rows: Int) throws {
+            var size = winsize(
+                ws_row: UInt16(rows),
+                ws_col: UInt16(cols),
+                ws_xpixel: 0,
+                ws_ypixel: 0
+            )
+            guard ioctl(masterFD, TIOCSWINSZ, &size) == 0 else {
+                throw NSError(domain: "cmux.tests", code: Int(errno), userInfo: [
+                    NSLocalizedDescriptionKey: "TIOCSWINSZ failed: \(String(cString: strerror(errno)))",
+                ])
+            }
+        }
+
+        defer {
+            if masterFD >= 0 { Darwin.close(masterFD) }
+            if slaveFD >= 0 { Darwin.close(slaveFD) }
+            Darwin.close(listenerFD)
+            Darwin.close(bridge.fd)
+            unlink(socketPath)
+        }
+
+        guard openpty(&masterFD, &slaveFD, nil, nil, nil) == 0 else {
+            throw NSError(domain: "cmux.tests", code: Int(errno), userInfo: [
+                NSLocalizedDescriptionKey: "openpty failed: \(String(cString: strerror(errno)))",
+            ])
+        }
+        try setPTYSize(cols: 90, rows: 24)
+
+        let socketHandled = startMockServer(listenerFD: listenerFD, state: state) { line in
+            guard let payload = self.jsonObject(line),
+                  let id = payload["id"] as? String,
+                  let method = payload["method"] as? String else {
+                return self.malformedRequestResponse(raw: line)
+            }
+            switch method {
+            case "workspace.remote.pty_bridge":
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "host": "127.0.0.1",
+                        "port": bridge.port,
+                        "token": token,
+                        "session_id": sessionId,
+                        "attachment_id": surfaceId,
+                    ]
+                )
+            case "workspace.remote.pty_resize":
+                let params = payload["params"] as? [String: Any] ?? [:]
+                resizeLock.lock()
+                resizePayloads.append(params)
+                let count = resizePayloads.count
+                resizeLock.unlock()
+                if count == 1 {
+                    firstResizeReceived.signal()
+                } else if count == 2 {
+                    secondResizeReceived.signal()
+                }
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "workspace_id": workspaceId,
+                        "surface_id": surfaceId,
+                        "session_id": sessionId,
+                        "attachment_id": surfaceId,
+                        "resized": true,
+                    ]
+                )
+            case "workspace.remote.pty_sessions":
+                return self.v2Response(id: id, ok: true, result: ["sessions": []])
+            case "workspace.remote.pty_attach_end":
+                return self.v2Response(
+                    id: id,
+                    ok: true,
+                    result: [
+                        "workspace_id": workspaceId,
+                        "surface_id": surfaceId,
+                        "session_id": sessionId,
+                        "cleared_remote_pty_session": true,
+                    ]
+                )
+            default:
+                return self.v2Response(
+                    id: id,
+                    ok: false,
+                    error: ["code": "unexpected_method", "message": "Unexpected method \(method)"]
+                )
+            }
+        }
+
+        let bridgeHandled = expectation(description: "bridge stayed open until settled resize")
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { bridgeHandled.fulfill() }
+            var clientAddr = sockaddr_in()
+            var clientAddrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let clientFD = withUnsafeMutablePointer(to: &clientAddr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                    Darwin.accept(bridge.fd, sockaddrPtr, &clientAddrLen)
+                }
+            }
+            guard clientFD >= 0 else { return }
+            defer { Darwin.close(clientFD) }
+
+            var pending = Data()
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while !pending.contains(0x0A) {
+                let count = Darwin.read(clientFD, &buffer, buffer.count)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    return
+                }
+                if count == 0 { return }
+                pending.append(buffer, count: count)
+            }
+
+            let ready = #"{"type":"ready","attachment_token":"attach-token"}"# + "\n"
+            _ = ready.withCString { ptr in
+                Darwin.write(clientFD, ptr, strlen(ptr))
+            }
+            _ = allowBridgeClose.wait(timeout: .now() + 5)
+        }
+
+        let process = Process()
+        let stderrPipe = Pipe()
+        let slaveHandle = FileHandle(fileDescriptor: slaveFD, closeOnDealloc: true)
+        slaveFD = -1
+        process.executableURL = URL(fileURLWithPath: cliPath)
+        process.arguments = [
+            "ssh-pty-attach",
+            "--workspace", workspaceId,
+            "--session-id", sessionId,
+            "--attachment-id", surfaceId,
+        ]
+        var environment = ProcessInfo.processInfo.environment
+        environment["CMUX_SOCKET_PATH"] = socketPath
+        environment["CMUX_CLI_SENTRY_DISABLED"] = "1"
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = slaveHandle
+        process.standardError = stderrPipe
+
+        try process.run()
+        slaveHandle.closeFile()
+        XCTAssertEqual(firstResizeReceived.wait(timeout: .now() + 5), .success)
+        try setPTYSize(cols: 132, rows: 43)
+        XCTAssertEqual(secondResizeReceived.wait(timeout: .now() + 5), .success)
+        allowBridgeClose.signal()
+
+        let exited = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            process.waitUntilExit()
+            exited.signal()
+        }
+        XCTAssertEqual(exited.wait(timeout: .now() + 5), .success)
+        wait(for: [socketHandled, bridgeHandled], timeout: 5)
+
+        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, stderr)
+        resizeLock.lock()
+        let capturedPayloads = resizePayloads
+        resizeLock.unlock()
+        XCTAssertGreaterThanOrEqual(capturedPayloads.count, 2)
+        let firstResize = capturedPayloads[0]
+        let secondResize = capturedPayloads[1]
+        for resize in [firstResize, secondResize] {
+            XCTAssertEqual(resize["workspace_id"] as? String, workspaceId)
+            XCTAssertEqual(resize["surface_id"] as? String, surfaceId)
+            XCTAssertEqual(resize["session_id"] as? String, sessionId)
+            XCTAssertEqual(resize["attachment_id"] as? String, surfaceId)
+            XCTAssertEqual(resize["attachment_token"] as? String, "attach-token")
+        }
+        XCTAssertEqual(firstResize["cols"] as? Int, 90)
+        XCTAssertEqual(firstResize["rows"] as? Int, 24)
+        XCTAssertEqual(secondResize["cols"] as? Int, 132)
+        XCTAssertEqual(secondResize["rows"] as? Int, 43)
+
+        let methods = state.snapshot().compactMap { self.jsonObject($0)?["method"] as? String }
+        let secondResizeIndex = try XCTUnwrap(methods.indices.filter { methods[$0] == "workspace.remote.pty_resize" }.dropFirst().first)
+        let sessionsIndex = try XCTUnwrap(methods.firstIndex(of: "workspace.remote.pty_sessions"))
+        XCTAssertLessThan(secondResizeIndex, sessionsIndex)
+    }
+
     func testSSHPTYAttachSerializesResizeBeforeEOFLocalCleanup() throws {
         let cliPath = try bundledCLIPath()
         let socketPath = makeSocketPath("sshptyresize")
@@ -3557,19 +4129,17 @@ final class CLINotifyProcessIntegrationRegressionTests: XCTestCase {
         }
         XCTAssertEqual(bridgeReady.wait(timeout: .now() + 5), .success)
 
-        var sawResize = false
-        for _ in 0..<10 {
-            Darwin.kill(process.processIdentifier, SIGWINCH)
-            if resizeRequestReceived.wait(timeout: .now() + 0.2) == .success {
-                sawResize = true
-                break
-            }
-        }
-        XCTAssertTrue(sawResize, "Expected ssh-pty-attach to issue a resize RPC after SIGWINCH")
+        XCTAssertEqual(
+            resizeRequestReceived.wait(timeout: .now() + 5),
+            .success,
+            "Expected ssh-pty-attach to issue a resize RPC before EOF cleanup"
+        )
 
         closeBridge.signal()
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        allowResizeResponse.signal()
+        for _ in 0..<4 {
+            allowResizeResponse.signal()
+        }
 
         let exited = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
@@ -3585,9 +4155,11 @@ final class CLINotifyProcessIntegrationRegressionTests: XCTestCase {
         XCTAssertEqual(stdout, "")
         XCTAssertEqual(stderr, "")
         let methods = state.snapshot().compactMap { self.jsonObject($0)?["method"] as? String }
-        XCTAssertEqual(methods, [
-            "workspace.remote.pty_bridge",
-            "workspace.remote.pty_resize",
+        let resizeIndex = try XCTUnwrap(methods.firstIndex(of: "workspace.remote.pty_resize"))
+        let sessionsIndex = try XCTUnwrap(methods.firstIndex(of: "workspace.remote.pty_sessions"))
+        XCTAssertEqual(methods.first, "workspace.remote.pty_bridge")
+        XCTAssertLessThan(resizeIndex, sessionsIndex)
+        XCTAssertEqual(Array(methods.suffix(2)), [
             "workspace.remote.pty_sessions",
             "workspace.remote.pty_attach_end",
         ])
