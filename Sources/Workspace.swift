@@ -17715,7 +17715,11 @@ final class Workspace: Identifiable, ObservableObject {
             // Re-check surface after reconcileGeometryNow() which can trigger AppKit
             // layout and view lifecycle changes that free surfaces (#432).
             if terminalPanel.surface.surface != nil {
-                terminalPanel.surface.forceRefresh()
+                hostedView.refreshSurfaceNow(
+                    reason: "workspace.geometry",
+                    forceGeometry: true,
+                    scheduleSettledRefresh: true
+                )
             }
             if terminalPanel.surface.surface == nil, isAttached && hasUsableBounds {
                 terminalPanel.surface.requestBackgroundSurfaceStartIfNeeded()
@@ -17937,7 +17941,11 @@ final class Workspace: Identifiable, ObservableObject {
                 guard let self, let panel = self.terminalPanel(for: panelId) else { return }
                 panel.hostedView.reconcileGeometryNow()
                 if panel.surface.surface != nil {
-                    panel.surface.forceRefresh()
+                    panel.hostedView.refreshSurfaceNow(
+                        reason: "workspace.movedTerminal",
+                        forceGeometry: true,
+                        scheduleSettledRefresh: true
+                    )
                 }
                 if panel.surface.surface == nil {
                     panel.surface.requestBackgroundSurfaceStartIfNeeded()

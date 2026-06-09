@@ -11,12 +11,67 @@ import CMUXMobileCore
 import ObjectiveC.runtime
 import Bonsplit
 import UserNotifications
+import QuartzCore
 
 #if canImport(cmux_DEV)
 @testable import cmux_DEV
 #elseif canImport(cmux)
 @testable import cmux
 #endif
+
+final class GhosttyDrawableGeometryTests: XCTestCase {
+    private final class CountingMetalLayer: CAMetalLayer {
+        var drawableSizeSetCount = 0
+
+        override var drawableSize: CGSize {
+            get { super.drawableSize }
+            set {
+                drawableSizeSetCount += 1
+                super.drawableSize = newValue
+            }
+        }
+    }
+
+    func testForceGeometryRewritesDrawableSizeEvenWhenValueIsUnchanged() {
+        let layer = CountingMetalLayer()
+        let size = CGSize(width: 800, height: 600)
+        layer.drawableSize = size
+        layer.drawableSizeSetCount = 0
+        var lastDrawableSize = size
+
+        let changed = GhosttyNSView.reconcileMetalDrawableSize(
+            layer,
+            drawablePixelSize: size,
+            lastDrawableSize: &lastDrawableSize,
+            forceGeometry: true
+        )
+
+        XCTAssertTrue(changed)
+        XCTAssertEqual(layer.drawableSizeSetCount, 1)
+        XCTAssertEqual(layer.drawableSize, size)
+        XCTAssertEqual(lastDrawableSize, size)
+    }
+
+    func testUnforcedDrawableReconcileSkipsUnchangedValue() {
+        let layer = CountingMetalLayer()
+        let size = CGSize(width: 800, height: 600)
+        layer.drawableSize = size
+        layer.drawableSizeSetCount = 0
+        var lastDrawableSize = size
+
+        let changed = GhosttyNSView.reconcileMetalDrawableSize(
+            layer,
+            drawablePixelSize: size,
+            lastDrawableSize: &lastDrawableSize,
+            forceGeometry: false
+        )
+
+        XCTAssertFalse(changed)
+        XCTAssertEqual(layer.drawableSizeSetCount, 0)
+        XCTAssertEqual(layer.drawableSize, size)
+        XCTAssertEqual(lastDrawableSize, size)
+    }
+}
 
 @MainActor
 final class GhosttyPasteboardHelperTests: XCTestCase {
