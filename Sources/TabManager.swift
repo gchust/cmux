@@ -1176,6 +1176,12 @@ class TabManager: ObservableObject {
                             tabId: selectedTabId,
                             context: notificationDismissalContext
                         )
+                        if case .explicitWorkspaceResume = notificationDismissalContext {
+                            self.recoverRemoteWorkspaceForUserActivation(
+                                tabId: selectedTabId,
+                                reason: "workspace.select"
+                            )
+                        }
                     }
                 }
                 if suppressFocusHistory {
@@ -6075,7 +6081,7 @@ class TabManager: ObservableObject {
         // a local login shell. Keep the exited surface visible so the user can see the error
         // and retry instead of making a detached remote workspace look local after relaunch.
         if keepsPersistentRemoteSurfaceOpen {
-            tab.markPersistentRemotePTYAttachFailed(surfaceId: surfaceId)
+            tab.markPersistentRemotePTYAttachChildExited(surfaceId: surfaceId)
             return
         }
 
@@ -6449,11 +6455,28 @@ class TabManager: ObservableObject {
             if let notificationDismissalContext {
                 dismissFocusedPanelNotificationIfActive(tabId: tabId, context: notificationDismissalContext)
             }
+            if case .some(.explicitWorkspaceResume) = notificationDismissalContext {
+                scheduleRemoteRecoveryForUserActivation(tabId: tabId, reason: "workspace.select.same")
+            }
             return
         }
 
         pendingSelectedTabNotificationDismissContext = notificationDismissalContext
         selectedTabId = tabId
+    }
+
+    private func recoverRemoteWorkspaceForUserActivation(tabId: UUID, reason: String) {
+        guard selectedTabId == tabId,
+              let workspace = tabs.first(where: { $0.id == tabId }) else {
+            return
+        }
+        workspace.recoverRemoteOnUserActivation(reason: reason)
+    }
+
+    private func scheduleRemoteRecoveryForUserActivation(tabId: UUID, reason: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.recoverRemoteWorkspaceForUserActivation(tabId: tabId, reason: reason)
+        }
     }
 
     private func dismissFocusedPanelNotificationIfActive(
