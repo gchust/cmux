@@ -152,13 +152,14 @@ final class PhonePushClient {
         lastSentAt[key] = now
 
         let hideContent = UserDefaults.standard.bool(forKey: PhonePushSettings.hideContentKey)
-        let payload = Payload(
+        let payload = PhonePushPayload(
             kind: .notify,
             title: notification.title,
             subtitle: notification.subtitle,
             body: notification.body,
             workspaceId: notification.tabId.uuidString,
             surfaceId: notification.surfaceId?.uuidString,
+            macDeviceId: MobileHostIdentity.deviceID(),
             notificationId: notification.id.uuidString,
             notificationIds: [],
             badgeCount: badgeCount,
@@ -194,13 +195,14 @@ final class PhonePushClient {
             let deduped = pendingDismissedIDs.filter { seen.insert($0).inserted }
             let chunk = Array(deduped.prefix(Self.maxDismissIDsPerPush))
             pendingDismissedIDs = Array(deduped.dropFirst(Self.maxDismissIDsPerPush))
-            await send(Payload(
+            await send(PhonePushPayload(
                 kind: .dismiss,
                 title: "",
                 subtitle: "",
                 body: "",
                 workspaceId: nil,
                 surfaceId: nil,
+                macDeviceId: nil,
                 notificationId: nil,
                 notificationIds: chunk,
                 badgeCount: pendingDismissBadgeCount,
@@ -209,33 +211,7 @@ final class PhonePushClient {
         }
     }
 
-    private struct Payload: Sendable {
-        enum Kind: String, Sendable {
-            /// Visible banner mirror of a Mac notification.
-            case notify
-            /// Silent banner-removal + badge push (Mac-side dismiss, cold lane).
-            case dismiss
-        }
-
-        let kind: Kind
-        let title: String
-        let subtitle: String
-        let body: String
-        let workspaceId: String?
-        let surfaceId: String?
-        /// Stable notification id (the Mac store ``TerminalNotification/id``).
-        /// Travels to APNs as both an `apns-collapse-id` (so a later Mac→iOS
-        /// dismiss can target the delivered banner) and `cmux.notificationId`
-        /// (so an iOS swipe can tell the Mac which notification was dismissed).
-        let notificationId: String?
-        /// The dismissed ids a `.dismiss` push carries (else empty).
-        let notificationIds: [String]
-        /// Authoritative unread total at send time, emitted as `aps.badge`.
-        let badgeCount: Int
-        let hideContent: Bool
-    }
-
-    private func send(_ payload: Payload) async {
+    private func send(_ payload: PhonePushPayload) async {
         guard let auth else { return }
         let tokens: (accessToken: String, refreshToken: String)
         do {
@@ -267,6 +243,7 @@ final class PhonePushClient {
             bodyDict["body"] = payload.hideContent ? "New terminal activity" : payload.body
             if let workspaceId = payload.workspaceId { bodyDict["workspaceId"] = workspaceId }
             if let surfaceId = payload.surfaceId { bodyDict["surfaceId"] = surfaceId }
+            if let macDeviceId = payload.macDeviceId { bodyDict["macDeviceId"] = macDeviceId }
             // Opaque UUID, not content: safe to send even when hideContent is on.
             if let notificationId = payload.notificationId { bodyDict["notificationId"] = notificationId }
         case .dismiss:

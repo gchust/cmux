@@ -2,6 +2,10 @@ import SwiftUI
 import Foundation
 import AppKit
 import Bonsplit
+import CmuxAppKitSupportUI
+import CmuxTestSupport
+import CmuxTerminal
+import CmuxFoundation
 
 /// View for rendering a terminal panel
 struct TerminalPanelView: View {
@@ -10,7 +14,7 @@ struct TerminalPanelView: View {
     private var notificationPaneRingEnabled = NotificationPaneRingSettings.defaultEnabled
     @AppStorage(TerminalTextBoxInputSettings.maxLinesKey)
     private var textBoxMaxLines = TerminalTextBoxInputSettings.defaultMaxLines
-    @State private var terminalFontSize = GhosttyConfig.load().fontSize
+    @State private var terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
@@ -125,7 +129,7 @@ struct TerminalPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onReceive(NotificationCenter.default.publisher(for: .ghosttyConfigDidReload)) { _ in
-            terminalFontSize = GhosttyConfig.load().fontSize
+            terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
         }
     }
 }
@@ -143,14 +147,13 @@ private struct AgentHibernationPlaceholderView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Image(systemName: "pause.circle")
-                .font(.system(size: 34, weight: .regular))
+            CmuxSystemSymbolImage(magnified: "pause.circle", pointSize: 34, weight: .regular)
                 .foregroundStyle(.secondary)
             VStack(spacing: 4) {
                 Text(String(localized: "terminal.agentHibernation.title", defaultValue: "Agent hibernated"))
-                    .font(.headline)
+                    .cmuxFont(.headline)
                 Text(state.agentDisplayName)
-                    .font(.subheadline)
+                    .cmuxFont(.subheadline)
                     .foregroundStyle(.secondary)
                 Text(
                     String.localizedStringWithFormat(
@@ -158,7 +161,7 @@ private struct AgentHibernationPlaceholderView: View {
                         lastActivityText
                     )
                 )
-                .font(.caption)
+                .cmuxFont(.caption)
                 .foregroundStyle(.tertiary)
             }
             Button(String(localized: "terminal.agentHibernation.resume", defaultValue: "Resume")) {
@@ -217,7 +220,7 @@ private func recordTerminalViewportGeometryForUITest(proxy: GeometryProxy, panel
         hostedFrameInContent = .zero
     }
 
-    _ = CmuxUITestCapture.mutateJSONObjectIfConfigured(envKey: "CMUX_UI_TEST_TERMINAL_VIEWPORT_PATH") { payload in
+    _ = UITestCaptureSink().mutateJSONObjectIfConfigured(envKey: "CMUX_UI_TEST_TERMINAL_VIEWPORT_PATH") { payload in
         payload["terminalViewportPanelId"] = panel.id.uuidString
         payload["terminalViewportPanelWidth"] = terminalViewportFormat(proxy.size.width)
         payload["terminalViewportPanelHeight"] = terminalViewportFormat(proxy.size.height)
@@ -263,7 +266,11 @@ struct PanelAppearance {
     }
 
     static func fromConfig(_ config: GhosttyConfig) -> PanelAppearance {
-        fromConfig(config, usesTransparentWindow: cmuxShouldUseTransparentBackgroundWindow())
+        fromConfig(
+            config,
+            usesTransparentWindow: WindowBackgroundComposition.policy
+                .shouldUseTransparentBackgroundWindow(glassEffectAvailable: false)
+        )
     }
 
     static func fromConfig(_ config: GhosttyConfig, usesTransparentWindow: Bool) -> PanelAppearance {

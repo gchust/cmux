@@ -1,8 +1,10 @@
 import AppKit
 import Bonsplit
-import CMUXWorkstream
+import CMUXAgentLaunch
 import Foundation
 @preconcurrency import UserNotifications
+import CmuxSettings
+import CmuxSidebar
 
 /// App-level coordinator that owns the shared `WorkstreamStore` and
 /// mediates between the socket thread (which processes `feed.*` V2
@@ -410,7 +412,7 @@ extension FeedCoordinator {
 
         // Elevate the workspace so it floats to the top of the sidebar,
         // honoring the user's Reorder on Notification preference.
-        if WorkspaceAutoReorderSettings.isEnabled() {
+        if UserDefaultsSettingsClient(defaults: .standard).value(for: SettingCatalog().app.reorderOnNotification) {
             tabManager.moveTabToTopForNotification(resolved.workspaceId)
         }
 
@@ -872,7 +874,8 @@ private extension FeedCoordinator {
                 title: title,
                 subtitle: subtitle,
                 body: body,
-                effects: effects
+                effects: effects,
+                runCommand: true
             )
             return
         }
@@ -935,7 +938,8 @@ private extension FeedCoordinator {
                             effects: TerminalNotificationStore.fallbackEffects(
                                 effects,
                                 authorizationState: requestFailed ? .unknown : .denied
-                            )
+                            ),
+                            runCommand: false
                         )
                     }
                 default:
@@ -949,7 +953,8 @@ private extension FeedCoordinator {
                             authorizationState: TerminalNotificationStore.authorizationState(
                                 from: settings.authorizationStatus
                             )
-                        )
+                        ),
+                        runCommand: false
                     )
                 }
             }
@@ -981,7 +986,8 @@ private extension FeedCoordinator {
                         title: title,
                         subtitle: subtitle,
                         body: body,
-                        effects: effects
+                        effects: effects,
+                        runCommand: false
                     )
                     return
                 }
@@ -1002,19 +1008,16 @@ private extension FeedCoordinator {
         title: String,
         subtitle: String,
         body: String,
-        effects: TerminalNotificationPolicyEffects
+        effects: TerminalNotificationPolicyEffects,
+        runCommand: Bool
     ) {
         guard isAwaitingDecision(requestId: requestId) else { return }
-        if effects.sound {
-            NotificationSoundSettings.playSelectedSound()
-        }
-        if effects.command {
-            NotificationSoundSettings.runCustomCommand(
-                title: title,
-                subtitle: subtitle,
-                body: body
-            )
-        }
+        NativeNotificationDeliveryHooks.runLocalFeedback(
+            title: title,
+            subtitle: subtitle,
+            body: body,
+            effects: effects, runCommand: runCommand
+        )
     }
 
     func cancelNotification(requestId: String) {
@@ -1075,7 +1078,7 @@ private func makeFeedNotificationPolicyContext(
             ),
             effects: effects
         ),
-        hooks: context?.cmuxConfigStore?.notificationHooks(startingFrom: cwd) ?? [],
+        hooks: context?.cmuxConfigStore?.notificationHooks(startingFrom: workspace?.isRemoteWorkspace == true ? nil : (normalizedFeedNotificationCWD(event.cwd) ?? workspace?.surfaceTabBarDirectory)) ?? [],
         globalConfigPath: context?.cmuxConfigStore?.globalConfigPath
     )
 }
